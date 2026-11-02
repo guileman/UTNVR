@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UTN FRSN — Laboratorio de realidad virtual · Metalurgia</title>
+<meta name="theme-color" content="#0d1322">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: #0d1322; font-family: system-ui, sans-serif; color: #e8eefc; }
+  body { background: radial-gradient(ellipse at 50% -10%, #17223d 0%, #0d1322 60%) fixed; }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 40px; }
+  header { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-bottom: 22px; }
+  .logo { width: 132px; height: 76px; flex: none; border-radius: 14px; background: #1b2233; border: 3px solid #ffd34d; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05; font-weight: 800; overflow: hidden; }
+  .logo b { color: #ffd34d; font-size: 33px; }
+  .logo span { color: #eef3ff; font-size: 22px; }
+  .logo img { width: 100%; height: 100%; object-fit: contain; }
+  header h1 { margin: 0; font-size: clamp(22px, 4vw, 34px); color: #ffd34d; line-height: 1.15; }
+  header p { margin: 4px 0 0; color: #8fa0c0; font-size: 15px; }
+  .badge { display: inline-block; margin-top: 8px; padding: 3px 12px; border-radius: 99px; font-size: 13px; border: 1px solid #46526e; color: #c9d4ea; background: rgba(12,17,30,.86); }
+  .badge.vr { border-color: #3fbf7f; color: #8ff0bd; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+  .card { display: flex; flex-direction: column; min-height: 96px; background: rgba(12,17,30,.86); border: 1px solid #2f3a55; border-radius: 12px; padding: 16px 18px 18px; color: inherit; text-decoration: none; transition: border-color .15s, background .15s, transform .15s; }
+  .card:hover, .card:focus-visible { border-color: #9cc6ff; background: rgba(24,34,58,.92); transform: translateY(-2px); outline: none; }
+  .card.off { opacity: .6; cursor: default; }
+  .card.off:hover { border-color: #2f3a55; background: rgba(12,17,30,.86); transform: none; }
+  .card.off .btn, .card.off:hover .btn { background: #46526e; }
+  .card:focus-visible { box-shadow: 0 0 0 3px #ffd34d; }
+  .card svg { width: 100%; height: 180px; border-radius: 8px; background: #101626; margin-bottom: 12px; }
+  .card h2 { margin: 0 0 6px; font-size: 24px; color: #ffd34d; }
+  .card p { margin: 0 0 12px; font-size: 15px; line-height: 1.5; color: #c9d4ea; }
+  .card p b { color: #9cc6ff; }
+  .tag { font-size: 13px; color: #8fa0c0; margin-bottom: 14px; }
+  .btn { margin-top: auto; display: flex; align-items: center; justify-content: center; min-height: 96px; border-radius: 14px; background: #2d6fd6; border: 2px solid #9cc6ff; font-size: 30px; font-weight: 700; color: #f1f5ff; }
+  .card:hover .btn, .card:focus-visible .btn { background: #3c8cff; }
+  .note { margin-top: 22px; background: rgba(12,17,30,.86); border: 1px solid #2f3a55; border-radius: 12px; padding: 14px 18px; font-size: 14px; line-height: 1.6; }
+  .note b { color: #9cc6ff; }
+  footer { margin-top: 18px; text-align: center; font-size: 12px; color: #6f7f9f; }
+  @media (max-width: 480px) { .logo { width: 108px; height: 64px; } .logo b { font-size: 27px; } .logo span { font-size: 18px; } .card svg { height: 150px; } .btn { font-size: 26px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo" id="logo" aria-label="UTN FRSN"><b>UTN</b><span>FRSN</span></div>
+    <div>
+      <h1>Laboratorio de realidad virtual · Metalurgia</h1>
+      <p>UTN · Facultad Regional San Nicolás</p>
+      <span class="badge" id="badge">Comprobando WebXR…</span>
+    </div>
+  </header>
+
+  <section class="cards" aria-label="Simuladores">
+    <a class="card" href="cristalab/" id="c1">
+      <svg viewBox="0 0 320 180" role="img" aria-label="Red cristalina con un defecto" preserveAspectRatio="xMidYMid meet">
+        <g stroke="#46526e" stroke-width="2">
+          <path d="M40 30H280M40 70H280M40 110H280M40 150H280M40 30V150M100 30V150M160 30V150M220 30V150M280 30V150"/>
+        </g>
+        <g fill="#9cc6ff">
+          <circle cx="40" cy="30" r="9"/><circle cx="100" cy="30" r="9"/><circle cx="160" cy="30" r="9"/><circle cx="220" cy="30" r="9"/><circle cx="280" cy="30" r="9"/>
+          <circle cx="40" cy="70" r="9"/><circle cx="100" cy="70" r="9"/><circle cx="160" cy="70" r="9"/><circle cx="220" cy="70" r="9"/><circle cx="280" cy="70" r="9"/>
+          <circle cx="40" cy="110" r="9"/><circle cx="100" cy="110" r="9"/><circle cx="220" cy="110" r="9"/><circle cx="280" cy="110" r="9"/>
+          <circle cx="40" cy="150" r="9"/><circle cx="100" cy="150" r="9"/><circle cx="160" cy="150" r="9"/><circle cx="220" cy="150" r="9"/><circle cx="280" cy="150" r="9"/>
+        </g>
+        <circle cx="160" cy="110" r="9" fill="none" stroke="#ffd34d" stroke-width="2" stroke-dasharray="4 3"/>
+        <circle cx="190" cy="90" r="6" fill="#ffd34d"/>
+      </svg>
+      <h2>CristaLab</h2>
+      <p>Redes cristalinas (CS, BCC, FCC, HCP) y <b>defectos</b>: vacancias, intersticiales, dislocaciones, maclas y límites de grano.</p>
+      <div class="tag">Meta Quest 2/3</div>
+      <div class="btn">Abrir</div>
+    </a>
+
+    <div class="card off" id="c2" aria-disabled="true">
+      <svg viewBox="0 0 320 180" role="img" aria-label="Silueta de alto horno con estufas" preserveAspectRatio="xMidYMid meet">
+        <rect x="0" y="162" width="320" height="18" fill="#17203a"/>
+        <path d="M118 162V120L104 78L122 40V24H168V40L186 78L172 120V162Z" fill="#2e3850" stroke="#9cc6ff" stroke-width="2.5"/>
+        <path d="M130 36H160" stroke="#46526e" stroke-width="3"/>
+        <path d="M118 120H172M110 84H180" stroke="#46526e" stroke-width="2.5"/>
+        <path d="M145 24V10M158 24V6" stroke="#ffd34d" stroke-width="3" stroke-linecap="round"/>
+        <g fill="#2e3850" stroke="#9cc6ff" stroke-width="2.5">
+          <path d="M206 162V52a18 18 0 0 1 36 0V162Z"/><path d="M250 162V62a18 18 0 0 1 36 0V162Z"/>
+        </g>
+        <path d="M172 130H206M172 142H250" stroke="#ff9f43" stroke-width="3"/>
+        <path d="M140 162V138h12v24Z" fill="#ff6a3d"/>
+      </svg>
+      <h2>Alto Horno</h2>
+      <p>Recorrido a <b>escala real</b> del alto horno y sus estufas, animación del proceso y notas explicativas.</p>
+      <div class="tag">Meta Quest 3</div>
+      <div class="btn">En construcción</div>
+    </div>
+  </section>
+
+  <div class="note">
+    Al abrir un simulador, tocá <b>ENTER VR</b> (abajo en la pantalla) para entrar con el visor.
+    Para volver a este menú desde dentro del simulador, usá el botón <b>Inicio</b> del panel de menú.
+    Al cambiar de página la sesión de realidad virtual se cierra y hay que volver a tocar ENTER VR.
+  </div>
+  <footer>UTN FRSN · Metalurgia · WebXR</footer>
+</main>
+<script>
+// Logo opcional: pegar un data URI (data:image/png;base64,...) para reemplazar la sigla de texto.
+const LOGO_URI = '';
+if (LOGO_URI) { const l = document.getElementById('logo'); l.textContent = ''; const i = new Image(); i.alt = 'UTN FRSN'; i.src = LOGO_URI; l.appendChild(i); }
+(function () {
+  const b = document.getElementById('badge');
+  const set = (vr) => { b.textContent = vr ? 'VR disponible' : 'Modo navegador'; b.className = 'badge' + (vr ? ' vr' : ''); };
+  if (navigator.xr && navigator.xr.isSessionSupported) {
+    navigator.xr.isSessionSupported('immersive-vr').then(set, () => set(false));
+  } else set(false);
+})();
+</script>
+</body>
+</html>

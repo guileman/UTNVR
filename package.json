@@ -1,0 +1,8 @@
+{
+  "name": "utnvr",
+  "private": true,
+  "type": "module",
+  "description": "UTN FRSN - simuladores WebXR (Meta Quest 3): CristaLab y Alto Horno",
+  "scripts": { "serve": "node tools/serve.mjs" },
+  "devDependencies": { "three": "0.169.0" }
+}

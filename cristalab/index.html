@@ -1,0 +1,1857 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>CristaLab — Redes y defectos cristalinos</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1322; font-family: system-ui, sans-serif; color: #e8eefc; }
+  canvas { display: block; }
+  #info { position: absolute; left: 16px; top: 16px; max-width: 470px; background: rgba(12,17,30,.86); padding: 14px 18px; border-radius: 12px; font-size: 14px; line-height: 1.5; border: 1px solid #2f3a55; }
+  #info h1 { margin: 0 0 6px; font-size: 20px; color: #ffd34d; }
+  #info b { color: #9cc6ff; }
+  #galeria { position: absolute; right: 16px; bottom: 16px; width: 340px; max-height: 70vh; overflow: auto; background: rgba(12,17,30,.94); border: 1px solid #2f3a55; border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 1.4; display: none; }
+  #galeria h2 { margin: 0 0 6px; font-size: 16px; color: #ffd34d; display: flex; justify-content: space-between; align-items: center; }
+  #galeria h2 button { background: none; border: 0; color: #9fb0cf; font-size: 22px; cursor: pointer; }
+  #galeria .it { display: flex; gap: 10px; align-items: center; margin: 8px 0; }
+  #galeria img, #galeria video { width: 130px; border-radius: 6px; background: #000; }
+  #galeria .it div { word-break: break-all; font-size: 11px; color: #9fb0cf; }
+  #galeria a { color: #9cc6ff; font-size: 13px; }
+  #galeria p { margin: 8px 0 0; color: #8fa0c0; font-size: 12px; }
+  #mira { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; pointer-events: none; }
+  #mira::before, #mira::after { content: ""; position: absolute; background: rgba(255,255,255,.85); }
+  #mira::before { left: 7px; top: 0; width: 2px; height: 16px; }
+  #mira::after { top: 7px; left: 0; height: 2px; width: 16px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">
+  <a href="../" style="float:right;color:#9cc6ff;font-size:12px;text-decoration:none">← Menú de inicio</a>
+  <h1>CristaLab</h1>
+  Simulador VR de la UTN FRSN: redes cristalinas (CS, BCC, FCC, HCP) y sus defectos: vacancias, intersticiales, sustitucionales, dislocaciones de borde y de tornillo, maclas y límites de grano.<br><br>
+  <b>Con visor (Quest):</b> tocá <b>ENTER VR</b>.<br>
+  <b>En PC:</b> hacé clic para mirar con el mouse (Esc suelta el puntero).<br>
+  Clic izq.: botones del menú / átomos · Clic der. sostenido: agarrar la red · Rueda: escala<br>
+  WASD: caminar · ↑ ↓: esfuerzo de corte τ (o ángulo θ) · Q/E, ←/→, R/F: girar la red<br>
+  Espacio: acción (A) · B: reiniciar defecto · Tab: siguiente defecto · 1-4: tipo de red<br>
+  Z: resetear todo · T: tamaño de átomos · G: planos principales · I: sitios · O: tipo de sitio · P: parciales · C: carga cíclica · F: par de Frenkel · K: foto · V: video · J: girar 90° · H: recentrar · M: sonido · 0: τ = 0
+</div>
+<div id="mira"></div>
+<div id="galeria"></div>
+<script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+// ===================== NÚCLEO CRISTALOGRÁFICO (sin three.js) =====================
+// Unidades internas: parámetro de red a = 1 (en HCP, a = lado basal). Todo en arrays planos.
+const S3 = Math.sqrt(3), C_HCP = Math.sqrt(8 / 3);
+const vadd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const vsub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const vsc = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const vdot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const vcross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const vlen = a => Math.hypot(a[0], a[1], a[2]);
+const vnorm = a => vsc(a, 1 / vlen(a));
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const smooth = t => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
+
+const CUB = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+const FCC_B = [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]];
+const BCC_B = [[0, 0, 0], [.5, .5, .5]];
+function bccTet() { // sitios tetraédricos BCC: (½, ¼, 0) y permutaciones
+  const out = [];
+  for (let zero = 0; zero < 3; zero++) for (let half = 0; half < 3; half++) {
+    if (half === zero) continue;
+    const q = 3 - zero - half;
+    for (const v of [.25, .75]) { const p = [0, 0, 0]; p[half] = .5; p[q] = v; out.push(p); }
+  }
+  return out;
+}
+function fccTet() { const o = []; for (const x of [.25, .75]) for (const y of [.25, .75]) for (const z of [.25, .75]) o.push([x, y, z]); return o; }
+
+const LAT = {
+  sc: {
+    id: 'sc', corto: 'CS', nombre: 'Cúbica simple', hex: false, cell: CUB, basis: [[0, 0, 0]], centering: [[0, 0, 0]],
+    nn: 1, R: .5, color: 0x9fb3cc, NC: 6, FEA: '0,52', apc: 1, rel: 'a = 2R', ej: 'Po-α (único metal CS)',
+    sites: { oct: [[.5, .5, .5]], tet: [] }, nombreSitio: ['cúbico', '—'],
+    tauC: .30, tauT: .50,
+    slipX: [1, 0, 0], slipY: [0, 1, 0], sistema: '{100}<100>',
+    twin: { plane: [1, 2, 0], axis: [0, 0, 1], label: '(120) — ilustrativa' },
+    gbZ: 2
+  },
+  bcc: {
+    id: 'bcc', corto: 'BCC', nombre: 'Cúbica centrada en el cuerpo', hex: false, cell: CUB, basis: BCC_B, centering: BCC_B,
+    nn: S3 / 2, R: S3 / 4, color: 0x8ea3c4, NC: 8, FEA: '0,68', apc: 2, rel: 'a = 4R/√3', ej: 'Fe-α, Cr, Mo, W, V, Nb',
+    sites: { oct: [[.5, .5, 0], [.5, 0, .5], [0, .5, .5], [.5, 0, 0], [0, .5, 0], [0, 0, .5]], tet: bccTet() }, nombreSitio: ['octaédrico', 'tetraédrico'],
+    tauC: .45, tauT: .50,
+    slipX: [1, 1, 1], slipY: [1, -1, 0], sistema: '{110}<111>',
+    twin: { plane: [1, 1, 2], axis: [1, -1, 0], label: '{112}<111>' },
+    gbZ: 1
+  },
+  fcc: {
+    id: 'fcc', corto: 'FCC', nombre: 'Cúbica centrada en las caras', hex: false, cell: CUB, basis: FCC_B, centering: FCC_B,
+    nn: Math.SQRT1_2, R: Math.SQRT2 / 4, color: 0xd98a52, NC: 12, FEA: '0,74', apc: 4, rel: 'a = 2R√2', ej: 'Cu, Al, Ni, Ag, Au, Fe-γ',
+    sites: { oct: [[.5, .5, .5], [.5, 0, 0], [0, .5, 0], [0, 0, .5]], tet: fccTet() }, nombreSitio: ['octaédrico', 'tetraédrico'],
+    tauC: .15, tauT: .65,
+    slipX: [1, -1, 0], slipY: [1, 1, 1], sistema: '{111}<110>',
+    twin: { plane: [1, 1, 1], axis: [1, -1, 0], label: '{111}<112>' },
+    gbZ: 1
+  },
+  hcp: {
+    id: 'hcp', corto: 'HCP', nombre: 'Hexagonal compacta', hex: true, cell: [[1, 0, 0], [-.5, S3 / 2, 0], [0, 0, C_HCP]],
+    basis: [[0, 0, 0], [1 / 3, 2 / 3, .5]], centering: [[0, 0, 0]], c: C_HCP,
+    nn: 1, R: .5, color: 0xb8c4cf, NC: 12, FEA: '0,74', apc: 6, rel: 'a = 2R, c/a ≈ 1,633', ej: 'Mg, Zn, Ti-α, Co, Zr',
+    sites: { oct: [[2 / 3, 1 / 3, .25], [2 / 3, 1 / 3, .75]], tet: [[0, 0, .375], [0, 0, .625], [1 / 3, 2 / 3, .125], [1 / 3, 2 / 3, .875]] },
+    nombreSitio: ['octaédrico', 'tetraédrico'],
+    tauC: .12, tauT: .30,
+    slipX: [1, 0, 0], slipY: [0, 0, 1], sistema: '(0001)<11-20> basal',
+    twin: { plane: [1, 0, 2], axis: [0, 1, 0], label: '{10-12}', gamma: (3 - C_HCP * C_HCP) / (S3 * C_HCP) },
+    gbZ: 1
+  }
+};
+
+function fracToCart(L, f) {
+  const c = L.cell;
+  return [f[0] * c[0][0] + f[1] * c[1][0] + f[2] * c[2][0], f[0] * c[0][1] + f[1] * c[1][1] + f[2] * c[2][1], f[0] * c[0][2] + f[1] * c[1][2] + f[2] * c[2][2]];
+}
+function dirCart(L, uvw) { return fracToCart(L, uvw); }
+function planeNormal(L, hkl) { // normal del plano (hkl) vía red recíproca
+  const [a1, a2, a3] = L.cell, V = vdot(a1, vcross(a2, a3));
+  const b1 = vsc(vcross(a2, a3), 1 / V), b2 = vsc(vcross(a3, a1), 1 / V), b3 = vsc(vcross(a1, a2), 1 / V);
+  return vnorm(vadd(vadd(vsc(b1, hkl[0]), vsc(b2, hkl[1])), vsc(b3, hkl[2])));
+}
+
+// Genera los puntos de la red (o de los sitios) en el marco local definido por rows=[X,Y,Z]
+function genPoints(L, rows, origin, filter, rMax, basisFrac) {
+  const bc = (basisFrac || L.basis).map(f => fracToCart(L, f)), c = L.cell, out = [];
+  const N = Math.ceil(rMax / 0.8) + 2;
+  // centro del barrido cerca del origen pedido
+  const oi = Math.round(origin[0]), oj = Math.round(origin[1]), ok = Math.round(origin[2] / c[2][2]);
+  const [X, Y, Z] = rows;
+  for (let i = oi - N; i <= oi + N; i++) for (let j = oj - N; j <= oj + N; j++) for (let k = ok - N; k <= ok + N; k++) {
+    const px = i * c[0][0] + j * c[1][0] + k * c[2][0] - origin[0];
+    const py = i * c[0][1] + j * c[1][1] + k * c[2][1] - origin[1];
+    const pz = i * c[0][2] + j * c[1][2] + k * c[2][2] - origin[2];
+    for (const b of bc) {
+      const qx = px + b[0], qy = py + b[1], qz = pz + b[2];
+      const x = X[0] * qx + X[1] * qy + X[2] * qz, y = Y[0] * qx + Y[1] * qy + Y[2] * qz, z = Z[0] * qx + Z[1] * qy + Z[2] * qz;
+      if (filter(x, y, z)) out.push([x, y, z]);
+    }
+  }
+  return out;
+}
+
+function periodAlong(L, dir) { // traslación de red más corta paralela a dir
+  const cen = L.centering.map(f => fracToCart(L, f)), c = L.cell; let best = Infinity; const N = 4;
+  for (let i = -N; i <= N; i++) for (let j = -N; j <= N; j++) for (let k = -N; k <= N; k++) for (const ce of cen) {
+    const t = [i * c[0][0] + j * c[1][0] + k * c[2][0] + ce[0], i * c[0][1] + j * c[1][1] + k * c[2][1] + ce[1], i * c[0][2] + j * c[1][2] + k * c[2][2] + ce[2]];
+    const l = vlen(t); if (l < 1e-6 || l >= best) continue;
+    if (vlen(vcross(t, dir)) < 1e-6 && vdot(t, dir) > 0) best = l;
+  }
+  return best;
+}
+
+function hexIn(x, z, Rh) { // hexágono regular con vértices sobre ±x
+  const ri = Rh * S3 / 2 + 1e-4;
+  return Math.abs(z) <= ri && Math.abs(x * S3 / 2 + z * .5) <= ri && Math.abs(x * S3 / 2 - z * .5) <= ri;
+}
+
+// ---------- Bloque (red perfecta y defectos puntuales) ----------
+function buildBlock(L, big) {
+  const e = 1e-4; let rows, origin, filter, rMax, inCell = null; const edges = [];
+  if (!L.hex) {
+    const n = big ? 4 : 3, h = n / 2; rows = CUB; origin = [h, h, h];
+    filter = (x, y, z) => Math.abs(x) <= h + e && Math.abs(y) <= h + e && Math.abs(z) <= h + e; rMax = n * 1.8 + 2;
+    if (!big) {
+      inCell = (x, y, z) => Math.abs(x) <= .5 + e && Math.abs(y) <= .5 + e && Math.abs(z) <= .5 + e;
+      const v = []; for (const x of [-.5, .5]) for (const y of [-.5, .5]) for (const z of [-.5, .5]) v.push([x, y, z]);
+      for (let i = 0; i < 8; i++) for (let j = i + 1; j < 8; j++) { const d = vsub(v[i], v[j]); if (Math.abs(vlen(d) - 1) < 1e-6) edges.push([v[i], v[j]]); }
+    }
+  } else {
+    const Rh = big ? 3 : 2; rows = [[1, 0, 0], [0, 0, 1], [0, -1, 0]]; origin = [0, 0, 0];
+    filter = (x, y, z) => Math.abs(y) <= L.c + e && hexIn(x, z, Rh); rMax = Rh + L.c + 3;
+    if (!big) {
+      inCell = (x, y, z) => hexIn(x, z, 1) && y >= -e && y <= L.c + e;
+      const ring = []; for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; ring.push([Math.cos(a), 0, -Math.sin(a)]); }
+      for (const yy of [0, L.c]) for (let k = 0; k < 6; k++) edges.push([[ring[k][0], yy, ring[k][2]], [ring[(k + 1) % 6][0], yy, ring[(k + 1) % 6][2]]]);
+      for (let k = 0; k < 6; k++) edges.push([[ring[k][0], 0, ring[k][2]], [ring[k][0], L.c, ring[k][2]]]);
+    }
+  }
+  const atoms = genPoints(L, rows, origin, filter, rMax);
+  const so = genPoints(L, rows, origin, filter, rMax, L.sites.oct);
+  const st = L.sites.tet.length ? genPoints(L, rows, origin, filter, rMax, L.sites.tet) : [];
+  const sites = so.map(p => ({ p, t: 0 })).concat(st.map(p => ({ p, t: 1 })));
+  const ext = boxOf(atoms);
+  return { atoms, sites, edges, inCell: inCell ? atoms.map(p => inCell(p[0], p[1], p[2])) : null, box: ext, rows };
+}
+
+function boxOf(atoms) {
+  const b = { x0: 1e9, x1: -1e9, y0: 1e9, y1: -1e9, z0: 1e9, z1: -1e9 };
+  for (const p of atoms) { b.x0 = Math.min(b.x0, p[0]); b.x1 = Math.max(b.x1, p[0]); b.y0 = Math.min(b.y0, p[1]); b.y1 = Math.max(b.y1, p[1]); b.z0 = Math.min(b.z0, p[2]); b.z1 = Math.max(b.z1, p[2]); }
+  return b;
+}
+
+function planeSpacing(L, rows) {
+  const pts = genPoints(L, rows, [0, 0, 0], (x, y, z) => Math.abs(x) < 3 && Math.abs(y) < 3 && Math.abs(z) < 3, 6);
+  let d = Infinity; for (const p of pts) if (p[1] > 1e-5 && p[1] < d) d = p[1];
+  return d;
+}
+
+// ---------- Dislocaciones ----------
+function buildDisl(L, screw) {
+  const nn = L.nn;
+  let X = vnorm(dirCart(L, L.slipX)), Y = L.hex ? vnorm(L.slipY) : vnorm(L.slipY), Z = vcross(X, Y);
+  if (screw) { Z = X; X = vcross(Y, Z); }
+  const rows = [X, Y, Z];
+  const d = planeSpacing(L, rows);
+  const origin = vsc(Y, -d / 2);
+  const px = periodAlong(L, X), pz = periodAlong(L, Z);
+  let hx, hz;
+  if (!screw) { hx = Math.round(12 * nn / px) * px / 2; const nz = Math.max(1, Math.round(1.8 * nn / pz)); hz = nz * pz / 2; }
+  else { hx = Math.max(1, Math.round(11 * nn / px)) * px / 2; const nz = Math.max(2, Math.round(5 * nn / pz)); hz = nz * pz / 2; }
+  const nPl = 5, hy = nPl * d, e = 1e-4;
+  const filter = (x, y, z) => x >= -hx + e && x < hx + e && Math.abs(y) < hy && z >= -hz + e && z < hz + e;
+  const atoms = genPoints(L, rows, origin, filter, Math.hypot(hx, hy, hz) + 3);
+  const b = nn; // en las cuatro redes |b| = distancia a primeros vecinos
+  // filas de átomos del plano superior: período de los "valles" de Peierls y origen
+  const xs = []; let x0 = 0, best = 1e9;
+  for (const p of atoms) if (Math.abs(p[1] - d / 2) < 1e-4) {
+    let v = ((p[0] % px) + px) % px; xs.push(v);
+    if (Math.abs(p[0]) < best) { best = Math.abs(p[0]); x0 = p[0]; }
+  }
+  xs.sort((a, c) => a - c); let hop = px;
+  for (let i = 1; i < xs.length; i++) { const dd = xs[i] - xs[i - 1]; if (dd > 1e-3 && dd < hop) hop = dd; }
+  if (xs.length) { const dd = xs[0] + px - xs[xs.length - 1]; if (dd > 1e-3 && dd < hop) hop = dd; }
+  // parciales de Shockley (solo FCC): elegimos el signo que no superpone átomos
+  let partial = null;
+  if (L.id === 'fcc') {
+    const lat = b / (2 * S3);
+    const cands = screw ? [[lat, b / 2], [-lat, b / 2]] : [[b / 2, lat], [b / 2, -lat]];
+    const up = atoms.filter(p => Math.abs(p[1] - d / 2) < 1e-4), dn = atoms.filter(p => Math.abs(p[1] + d / 2) < 1e-4);
+    const Lx = 2 * hx, Lz = 2 * hz; let bestC = null, bestD = -1;
+    for (const c of cands) {
+      let m = 1e9;
+      for (const p of up) for (const q of dn) {
+        let dx = p[0] + c[0] - q[0], dz = p[2] + c[1] - q[2];
+        dx -= Lx * Math.round(dx / Lx); dz -= Lz * Math.round(dz / Lz);
+        const r = Math.hypot(dx, d, dz); if (r < m) m = r;
+      }
+      if (m > bestD) { bestD = m; bestC = c; }
+    }
+    const tot = screw ? [0, b] : [b, 0];
+    partial = { R: bestC, L: [tot[0] - bestC[0], tot[1] - bestC[1]], sep: 3.5 * nn };
+  }
+  return { atoms, rows, d, b, hx, hy, hz, px, pz, hop, x0, partial, screw, box: boxOf(atoms) };
+}
+
+// Campo de desplazamientos de dislocaciones rectas paralelas a z, núcleo en (xc, 0).
+// cores: [{xc, bx, bz, w}], bx = componente de borde (en x), bz = componente tornillo (en z).
+const NU = 0.33;
+function dislDisp(x, y, cores, nc, R2ref, out) {
+  let ux = 0, uy = 0, uz = 0;
+  for (let k = 0; k < nc; k++) {
+    const c = cores[k], dx = x - c.xc, dy = y;
+    let r2 = dx * dx + dy * dy; if (r2 < 1e-4) r2 = 1e-4;
+    const th = Math.atan2(dy, dx);
+    if (c.bx !== 0) {
+      ux += c.bx / (2 * Math.PI) * (th + c.w * dx * dy / (2 * (1 - NU) * r2));
+      uy += -c.bx / (2 * Math.PI) * c.w * ((1 - 2 * NU) / (4 * (1 - NU)) * Math.log(r2 / R2ref) + (dx * dx - dy * dy) / (4 * (1 - NU) * r2));
+    }
+    if (c.bz !== 0) uz += c.bz / (2 * Math.PI) * th;
+  }
+  out[0] = ux; out[1] = uy; out[2] = uz;
+}
+
+// ---------- Maclas ----------
+function buildTwin(L) {
+  const nn = L.nn, T = L.twin;
+  const Y = planeNormal(L, T.plane), Z = vnorm(dirCart(L, T.axis)), X = vcross(Y, Z);
+  const rows = [X, Y, Z];
+  const pz = periodAlong(L, Z), nz = Math.max(1, Math.round(3 * nn / pz)), hz = nz * pz / 2;
+  const hx = 5 * nn, hy = 4.6 * nn, e = 1e-4;
+  const zin = z => z >= -hz + e && z < hz + e;
+  const pool = genPoints(L, rows, [0, 0, 0], (x, y, z) => Math.abs(x) < hx + 4 * nn && Math.abs(y) < hy + 3 * nn && Math.abs(z) < hz + 3 * nn, Math.hypot(hx, hy, hz) + 8);
+  const atoms = pool.filter(p => Math.abs(p[0]) <= hx + e && Math.abs(p[1]) <= hy && zin(p[2]));
+  const mirror = pool.map(p => [p[0], -p[1], p[2]]);
+  // primera capa (y > 0) presente tanto en la red original como en la especular
+  let y1 = Infinity;
+  for (const p of atoms) if (p[1] > 1e-4 && p[1] < y1 && mirror.some(m => Math.abs(m[1] - p[1]) < 1e-4)) y1 = p[1];
+  // átomo de referencia en la primera capa
+  let P0 = null, bd = 1e9;
+  for (const p of atoms) if (Math.abs(p[1] - y1) < 1e-4) { const r = p[0] * p[0] + p[2] * p[2]; if (r < bd) { bd = r; P0 = p; } }
+  let s = null, bs = 1e9;
+  for (const m of mirror) if (Math.abs(m[1] - y1) < 1e-4) {
+    const c = [m[0] - P0[0], 0, m[2] - P0[2]]; const l = vlen(c);
+    const score = l + 1e-3 * Math.abs(c[2]);
+    if (score < bs - 1e-7) { bs = score; s = c; }
+  }
+  const shuffFor = sY => atoms.map(p => {
+    if (p[1] <= 1e-4) return [0, 0, 0];
+    const sh = vadd(p, vsc(sY, p[1]));
+    let bm = 1e9, bq = null;
+    for (const m of mirror) { const dx = m[0] - sh[0], dy = m[1] - sh[1], dz = m[2] - sh[2]; const r = dx * dx + dy * dy + dz * dz; if (r < bm) { bm = r; bq = m; } }
+    return Math.sqrt(bm) < 0.6 * nn ? vsub(bq, sh) : [0, 0, 0];
+  });
+  let sY = vsc(s, 1 / y1), shuffle;
+  if (T.gamma) { // red no Bravais (HCP): corte conocido + reacomodos (shuffles) atómicos
+    let bestSum = Infinity;
+    for (const sg of [1, -1]) {
+      const cand = [sg * T.gamma, 0, 0], sh = shuffFor(cand);
+      const sum = sh.reduce((a, v) => a + vlen(v), 0);
+      if (sum < bestSum) { bestSum = sum; sY = cand; shuffle = sh; }
+    }
+    s = vsc(sY, y1);
+  } else shuffle = shuffFor(sY);
+  let ytop = 0; for (const p of atoms) ytop = Math.max(ytop, p[1]);
+  return { atoms, rows, y1, s, sY, shuffle, hx, hy, hz, ytop, gamma: vlen(s) / y1, box: boxOf(atoms) };
+}
+
+// ---------- Límite de grano (inclinación alrededor de z) ----------
+function buildGB(L, thetaDeg) {
+  const nn = L.nn, e = 1e-4;
+  const X0 = [1, 0, 0], Y0 = L.hex ? [0, 1, 0] : [0, 1, 0], Z0 = [0, 0, 1];
+  const pz = periodAlong(L, Z0), hz = L.gbZ * pz / 2;
+  const hx = 6 * nn, hy = 5 * nn;
+  const zin = z => z >= -hz + e && z < hz + e;
+  const grains = [];
+  for (const g of [0, 1]) {
+    const phi = (g === 0 ? 1 : -1) * thetaDeg * Math.PI / 360, c = Math.cos(phi), s = Math.sin(phi);
+    const rows = [vsub(vsc(X0, c), vsc(Y0, s)), vadd(vsc(X0, s), vsc(Y0, c)), Z0];
+    grains.push(genPoints(L, rows, [0, 0, 0], (x, y, z) => (g === 0 ? (x < 0 && x >= -hx) : (x >= 0 && x <= hx)) && Math.abs(y) <= hy && zin(z), Math.hypot(hx, hy, hz) + 3));
+  }
+  const left = grains[0], right = [];
+  const near = left.filter(p => p[0] > -1.2 * nn);
+  for (const p of grains[1]) {
+    let ok = true;
+    if (p[0] < 1.2 * nn) for (const q of near) { const dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2]; if (dx * dx + dy * dy + dz * dz < (0.7 * nn) ** 2) { ok = false; break; } }
+    if (ok) right.push(p);
+  }
+  const atoms = left.concat(right), grain = left.map(() => 0).concat(right.map(() => 1));
+  return { atoms, grain, hx, hy, hz, box: boxOf(atoms) };
+}
+
+// ===================== CONSTANTES Y ESTADO =====================
+const NN_VIS = 0.075;         // distancia entre primeros vecinos en el modelo (m) → ≈ 3·10⁸ aumentos
+const MAX = 1800, MAXS = 1600, MAXV = 128;
+const HOME = new THREE.Vector3(0, 1.32, -1.1);
+const station = new THREE.Group(); // pedestal + menú + barra: se reubican juntos frente al jugador
+
+const MODES = [
+  { id: 'perfect', nombre: 'Red perfecta' },
+  { id: 'vac', nombre: 'Vacancia' },
+  { id: 'int', nombre: 'Intersticial' },
+  { id: 'sub', nombre: 'Sustitucional' },
+  { id: 'edge', nombre: 'Dislocación de borde' },
+  { id: 'screw', nombre: 'Dislocación de tornillo' },
+  { id: 'twin', nombre: 'Macla' },
+  { id: 'gb', nombre: 'Límite de grano' },
+];
+const modeName = id => MODES.find(m => m.id === id).nombre;
+
+const st = {
+  lat: 'fcc', mode: 'edge', compact: false, showSites: false, siteType: 0, partials: false,
+  cyclic: false, sound: true, guides: true, bonds: false, plane: 0, help: false, capPreview: false, capFrame: 'cristal', capAuto: true,
+  sliderTau: 0, stickTau: 0, keyTau: 0, tau: 0, gbAngle: 8, time: 0,
+};
+let L = LAT[st.lat];
+
+// Datos masivos en arrays planos
+const REF = new Float32Array(MAX * 3), CUR = new Float32Array(MAX * 3), TGT = new Float32Array(MAX * 3);
+const SHUF = new Float32Array(MAX * 3);
+const KIND = new Uint8Array(MAX), HID = new Uint8Array(MAX), GRP = new Uint8Array(MAX), INCELL = new Uint8Array(MAX);
+const SITEOF = new Int16Array(MAX);
+const PLN = new Uint8Array(MAX).fill(255), PLC = new Uint8Array(MAX); // clase de apilamiento (A,B,C…) y plano central resaltado
+let PLANE = null;            // plano principal seleccionado (info para el HUD y las guías)
+const SITES = new Float32Array(MAXS * 3), SITET = new Uint8Array(MAXS), SITEOCC = new Int16Array(MAXS);
+let N = 0, NS = 0;
+let MD = null;               // metadatos del modelo actual
+let posDirty = true, colDirty = true, relaxDirty = false;
+let SEL = -1, NEIGH = [];    // átomo seleccionado y sus vecinos
+let JUMP = null;             // animación de salto difusivo
+const KCOL = { 1: 0x2c3038, 2: 0x3f9dff, 3: 0x63d471, 4: 0xffcf40 };
+const KRAD = { 0: 1, 1: .58, 2: 1.18, 3: .8, 4: 1 };
+
+// ===================== RENDERER, ESCENA, CÁMARA =====================
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+renderer.xr.setFoveation(1);
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+const scene = new THREE.Scene();
+const FOG = new THREE.Color(0xcddcea);
+scene.background = FOG;
+scene.fog = new THREE.Fog(FOG, 40, 220);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.03, 1000);
+camera.position.set(0, 1.7, 0);
+scene.add(camera);
+
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// ---------- utilidades de lienzo ----------
+function canvasTex(cv) { const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; }
+function mkCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+function wrap(g, text, x, y, maxW, lh, maxY) {
+  for (const par of text.split('\n')) {
+    let line = '';
+    for (const w of par.split(' ')) {
+      const t = line ? line + ' ' + w : w;
+      if (g.measureText(t).width > maxW && line) { if (y > maxY) return y; g.fillText(line, x, y); y += lh; line = w; } else line = t;
+    }
+    if (y > maxY) return y; g.fillText(line, x, y); y += lh;
+  }
+  return y;
+}
+
+// ===================== ENTORNO =====================
+scene.add(new THREE.HemisphereLight(0xe2ecff, 0x56663f, 1.1));
+const sun = new THREE.DirectionalLight(0xfff3df, 1.9); sun.position.set(30, 60, 20); scene.add(sun);
+const SUN_DIR = sun.position.clone().normalize();
+
+{ // cielo
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { top: { value: new THREE.Color(0x3d78c9) }, hor: { value: new THREE.Color(0xcddcea) }, bot: { value: new THREE.Color(0x8a9a80) }, sunDir: { value: SUN_DIR } },
+    vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `uniform vec3 top, hor, bot, sunDir; varying vec3 vD;
+      void main(){ float h = vD.y; vec3 c = mix(hor, top, smoothstep(0.0, 0.55, h)); c = mix(c, bot, smoothstep(0.0, -0.25, h));
+        float s = max(dot(normalize(vD), sunDir), 0.0); c += vec3(1.0,0.92,0.75)*(pow(s, 900.0)*6.0 + pow(s, 10.0)*0.25);
+        gl_FragColor = vec4(c, 1.0);
+        #include <colorspace_fragment>
+      }`
+  });
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(450, 24, 12), mat); sky.renderOrder = -10; scene.add(sky);
+}
+{ // pasto
+  const c = mkCanvas(256, 256), g = c.getContext('2d');
+  g.fillStyle = '#5f8a3e'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2600; i++) {
+    const x = Math.random() * 256, y = Math.random() * 256, l = 3 + Math.random() * 6;
+    g.strokeStyle = `hsl(${85 + Math.random() * 30},${35 + Math.random() * 25}%,${25 + Math.random() * 22}%)`;
+    g.lineWidth = 1; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() - .5) * 3, y - l); g.stroke();
+  }
+  const t = canvasTex(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(80, 80);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshLambertMaterial({ map: t }));
+  ground.rotation.x = -Math.PI / 2; scene.add(ground);
+  // losa del laboratorio al aire libre
+  const slab = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.3, 0.04, 10), new THREE.MeshLambertMaterial({ color: 0xc9c4b8, flatShading: true }));
+  slab.position.y = 0.02; scene.add(slab);
+}
+{ // pedestal torneado bajo el cristal
+  const pts = [[0, 0], [.32, 0], [.34, .05], [.2, .1], [.12, .2], [.1, .6], [.16, .7], [.3, .74], [.3, .78], [0, .78]].map(p => new THREE.Vector2(p[0], p[1]));
+  const ped = new THREE.Mesh(new THREE.LatheGeometry(pts, 10), new THREE.MeshLambertMaterial({ color: 0x6d7480, flatShading: true }));
+  ped.position.set(HOME.x, 0.04, HOME.z); ped.scale.set(1, 1.0, 1); station.add(ped);
+}
+{ // árboles low-poly instanciados
+  const n = 40, trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(.18, .25, 2, 6), new THREE.MeshLambertMaterial({ color: 0x6b4a2e, flatShading: true }), n);
+  const crown = new THREE.InstancedMesh(new THREE.ConeGeometry(1.6, 4.5, 7), new THREE.MeshLambertMaterial({ color: 0x3e6b34, flatShading: true }), n);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, r = 22 + Math.random() * 60, k = .7 + Math.random() * .8;
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 6);
+    s.set(k, k, k); p.set(Math.cos(a) * r, k, Math.sin(a) * r); m.compose(p, q, s); trunk.setMatrixAt(i, m);
+    p.y = k * 4.1; m.compose(p, q, s); crown.setMatrixAt(i, m);
+  }
+  scene.add(trunk, crown);
+}
+{ // nubes
+  const c = mkCanvas(256, 128), g = c.getContext('2d');
+  for (let i = 0; i < 14; i++) {
+    const x = 40 + Math.random() * 176, y = 50 + Math.random() * 40, r = 20 + Math.random() * 30;
+    const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, 'rgba(255,255,255,.9)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 256, 128);
+  }
+  const t = canvasTex(c);
+  // planos fijos en el mundo (no sprites): así no giran con el alabeo de las gafas
+  const cloudGeo = new THREE.PlaneGeometry(90, 45), cloudMat = new THREE.MeshBasicMaterial({ map: t, fog: false, depthWrite: false, transparent: true, opacity: .85, side: THREE.DoubleSide });
+  for (let i = 0; i < 9; i++) {
+    const cl = new THREE.Mesh(cloudGeo, cloudMat);
+    const a = Math.random() * Math.PI * 2, r = 160 + Math.random() * 120, h = 60 + Math.random() * 40;
+    cl.position.set(Math.cos(a) * r, h, Math.sin(a) * r); cl.lookAt(0, h * .6, 0); cl.scale.set(1 + Math.random() * .5, 1, 1); scene.add(cl);
+  }
+}
+
+// ===================== CRISTAL =====================
+const crystal = new THREE.Group(); scene.add(crystal);
+crystal.position.copy(HOME);
+let userScale = 1;
+const MODEZOOM = { perfect: 1.5, vac: 1.25, int: 1.25, sub: 1.25 };
+const baseScale = () => NN_VIS / L.nn * (MODEZOOM[st.mode] || 1);
+
+const atomGeo = new THREE.IcosahedronGeometry(1, 1);
+const atomMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+const atoms = new THREE.InstancedMesh(atomGeo, atomMat, MAX);
+atoms.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+atoms.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 3), 3);
+atoms.instanceColor.setUsage(THREE.DynamicDrawUsage);
+atoms.frustumCulled = false; crystal.add(atoms);
+
+// marcas de vacancias (huecos) e intersticios
+const vacMesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1, 0), new THREE.MeshBasicMaterial({ color: 0xff4d4d, wireframe: true, fog: false }), MAXV);
+vacMesh.frustumCulled = false; vacMesh.count = 0; crystal.add(vacMesh);
+const siteMesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1, 0), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .55, fog: false }), MAXS);
+siteMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAXS * 3), 3);
+siteMesh.frustumCulled = false; siteMesh.count = 0; crystal.add(siteMesh);
+
+function lineObj(maxSeg, color, onTop, opacity = 1) {
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(maxSeg * 6), 3));
+  g.setDrawRange(0, 0);
+  const m = new THREE.LineBasicMaterial({ color, depthTest: !onTop, transparent: opacity < 1 || onTop, opacity, fog: false });
+  const l = new THREE.LineSegments(g, m); l.frustumCulled = false; if (onTop) l.renderOrder = 50; return l;
+}
+function setLines(obj, segs) { // segs: array plano [x,y,z,x,y,z,...]
+  const a = obj.geometry.attributes.position; const n = Math.min(segs.length, a.array.length);
+  a.array.set(n === segs.length ? segs : segs.slice(0, n)); a.needsUpdate = true; obj.geometry.setDrawRange(0, n / 3);
+}
+const cellLines = lineObj(24, 0xffffff, false, .9); crystal.add(cellLines);
+// enlaces a primeros vecinos (recalculados con las posiciones actuales: se rompen y rehacen en el núcleo)
+const MAXB = 6000;
+const bondGeo = new THREE.BufferGeometry();
+bondGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAXB * 6), 3).setUsage(THREE.DynamicDrawUsage));
+bondGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAXB * 6), 3).setUsage(THREE.DynamicDrawUsage));
+bondGeo.setDrawRange(0, 0);
+const bondLines = new THREE.LineSegments(bondGeo, new THREE.LineBasicMaterial({ vertexColors: true, fog: false, transparent: true, opacity: .9 }));
+bondLines.frustumCulled = false; crystal.add(bondLines);
+const GCELL = new Int32Array(MAX), GHEAD = new Int32Array(65536), GNEXT = new Int32Array(MAX);
+let bondTimer = 0;
+function updateBonds() {
+  if (!st.bonds) { bondGeo.setDrawRange(0, 0); return; }
+  const nn = L.nn, cut = 1.12 * nn, cut2 = cut * cut, cs = cut;
+  let x0 = 1e9, y0 = 1e9, z0 = 1e9;
+  for (let i = 0; i < N; i++) { x0 = Math.min(x0, CUR[i * 3]); y0 = Math.min(y0, CUR[i * 3 + 1]); z0 = Math.min(z0, CUR[i * 3 + 2]); }
+  const NX = 40, NY = 40, NZ = 40; GHEAD.fill(-1);
+  const cellOf = (x, y, z) => { const a = Math.min(NX - 1, Math.floor((x - x0) / cs)), b = Math.min(NY - 1, Math.floor((y - y0) / cs)), c = Math.min(NZ - 1, Math.floor((z - z0) / cs)); return (a * NY + b) * NZ + c; };
+  for (let i = 0; i < N; i++) { if (HID[i]) continue; const c = cellOf(CUR[i * 3], CUR[i * 3 + 1], CUR[i * 3 + 2]); GCELL[i] = c; GNEXT[i] = GHEAD[c]; GHEAD[c] = i; }
+  const P = bondGeo.attributes.position.array, C = bondGeo.attributes.color.array; let nb = 0;
+  for (let i = 0; i < N && nb < MAXB; i++) {
+    if (HID[i]) continue;
+    const x = CUR[i * 3], y = CUR[i * 3 + 1], z = CUR[i * 3 + 2], c = GCELL[i];
+    const a = Math.floor(c / (NY * NZ)), b = Math.floor(c / NZ) % NY, cz = c % NZ;
+    for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) for (let dc = -1; dc <= 1; dc++) {
+      const A = a + da, B = b + db, Cz = cz + dc; if (A < 0 || B < 0 || Cz < 0 || A >= NX || B >= NY || Cz >= NZ) continue;
+      for (let j = GHEAD[(A * NY + B) * NZ + Cz]; j >= 0; j = GNEXT[j]) {
+        if (j <= i) continue;
+        const dx = CUR[j * 3] - x, dy = CUR[j * 3 + 1] - y, dz2 = CUR[j * 3 + 2] - z, r2 = dx * dx + dy * dy + dz2 * dz2;
+        if (r2 > cut2 || nb >= MAXB) continue;
+        // color según la longitud: comprimido → azul, normal → gris, estirado → rojo
+        const e = clamp((Math.sqrt(r2) / nn - 1) / .08, -1, 1);
+        const cr = e > 0 ? .75 + .25 * e : .75 + .5 * e, cg = .75 - .45 * Math.abs(e), cb = e < 0 ? .75 - .25 * e : .75 - .5 * e;
+        const o = nb * 6;
+        P[o] = x; P[o + 1] = y; P[o + 2] = z; P[o + 3] = CUR[j * 3]; P[o + 4] = CUR[j * 3 + 1]; P[o + 5] = CUR[j * 3 + 2];
+        C[o] = C[o + 3] = cr; C[o + 1] = C[o + 4] = cg; C[o + 2] = C[o + 5] = cb; nb++;
+      }
+    }
+  }
+  bondGeo.attributes.position.needsUpdate = true; bondGeo.attributes.color.needsUpdate = true; bondGeo.setDrawRange(0, nb * 2);
+}
+const neighLines = lineObj(16, 0xffe066, true); crystal.add(neighLines);
+const coreLines = lineObj(2, 0xffd34d, true); crystal.add(coreLines);
+const arrowLines = lineObj(9, 0xff6a3d, true); crystal.add(arrowLines);
+
+function quad(color, opacity) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false, fog: false }));
+  m.renderOrder = 20; return m;
+}
+const slipQuad = quad(0x66ccff, .16), twinQuad0 = quad(0x6dffb0, .18), twinQuad1 = quad(0x6dffb0, .28), gbQuad = quad(0xffa64d, .18);
+const planeQuad = quad(0xffd34d, .2);
+crystal.add(slipQuad, twinQuad0, twinQuad1, gbQuad, planeQuad);
+function placeHQuad(q, y, b, dx = 0) { q.rotation.set(-Math.PI / 2, 0, 0); q.position.set((b.x0 + b.x1) / 2 + dx, y, (b.z0 + b.z1) / 2); q.scale.set(b.x1 - b.x0 + 2 * L.nn, b.z1 - b.z0 + 2 * L.nn, 1); }
+
+// ---------- sprites indicadores (pool) ----------
+const texCache = new Map();
+function textTex(txt, color = '#ffe680') {
+  const key = txt + color; if (texCache.has(key)) return texCache.get(key);
+  const c = mkCanvas(256, 64), g = c.getContext('2d'); g.font = 'bold 34px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.lineWidth = 7; g.strokeStyle = 'rgba(10,14,28,.85)'; g.strokeText(txt, 128, 34); g.fillStyle = color; g.fillText(txt, 128, 34);
+  const t = canvasTex(c); texCache.set(key, t); return t;
+}
+function symbolTex(kind) {
+  const key = 'sym:' + kind; if (texCache.has(key)) return texCache.get(key);
+  const c = mkCanvas(128, 128), g = c.getContext('2d'); g.lineCap = 'round';
+  for (const [w, col] of [[18, 'rgba(10,14,28,.85)'], [9, '#ffd34d']]) {
+    g.lineWidth = w; g.strokeStyle = col; g.beginPath();
+    if (kind === 'edge') { g.moveTo(64, 22); g.lineTo(64, 98); g.moveTo(26, 98); g.lineTo(102, 98); }
+    else { g.arc(64, 64, 36, 0.5, Math.PI * 1.85); g.moveTo(94, 30); g.lineTo(98, 52); g.lineTo(78, 50); }
+    g.stroke();
+  }
+  const t = canvasTex(c); texCache.set(key, t); return t;
+}
+const sprites = [];
+for (let i = 0; i < 6; i++) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ depthTest: false, depthWrite: false, transparent: true, fog: false }));
+  s.renderOrder = 900; s.visible = false; scene.add(s); sprites.push({ s, local: new THREE.Vector3(), size: .03, aspect: 1 });
+}
+let spriteN = 0;
+function useSprite(tex, lx, ly, lz, size, aspect) {
+  const o = sprites[spriteN++]; if (!o) return;
+  if (o.s.material.map !== tex) { if (!o.s.material.map) o.s.material.needsUpdate = true; o.s.material.map = tex; }
+  o.local.set(lx, ly, lz); o.size = size; o.aspect = aspect; o.s.visible = true;
+}
+
+
+// ===================== MENÚ FIJO AL MUNDO =====================
+const MW = 1024, MH = 1640;
+const APP_NAME = 'CristaLab';
+const LOGO_URI = '';          // logo UTN FRSN en data URI (PNG/JPG/SVG en base64); vacío = marca de texto
+const logoImg = new Image(); let logoOk = false;
+if (LOGO_URI) { logoImg.onload = () => { logoOk = true; menuDirty = true; }; logoImg.src = LOGO_URI; }
+const menuCv = mkCanvas(MW, MH), menuG = menuCv.getContext('2d'), menuTex = canvasTex(menuCv);
+const menu = new THREE.Mesh(new THREE.PlaneGeometry(.72, .72 * MH / MW), new THREE.MeshBasicMaterial({ map: menuTex, fog: false, transparent: true }));
+menu.position.set(-0.98, 1.25, -0.72); menu.lookAt(0, 1.55, 0); station.add(menu);
+{ // marco y patas del atril
+  const fr = new THREE.Mesh(new THREE.BoxGeometry(.76, .76 * MH / MW + .04, .02), new THREE.MeshLambertMaterial({ color: 0x2a3140, flatShading: true }));
+  fr.position.set(0, 0, -.012); menu.add(fr);
+  const leg = new THREE.Mesh(new THREE.CylinderGeometry(.02, .03, 0.9, 6), new THREE.MeshLambertMaterial({ color: 0x4a5160, flatShading: true }));
+  leg.position.set(0, -.86, -.05); menu.add(leg);
+}
+// panel de estado (red, defecto, τ, etc.): parte del menú fijo, encima del título
+const hudCv = mkCanvas(1024, 200), hudG = hudCv.getContext('2d'), hudTex = canvasTex(hudCv);
+const hud = new THREE.Mesh(new THREE.PlaneGeometry(.72, .72 * 200 / 1024), new THREE.MeshBasicMaterial({ map: hudTex, fog: false, transparent: true }));
+hud.position.set(0, .72 * MH / MW / 2 + .085, 0); menu.add(hud);
+{
+  const fr = new THREE.Mesh(new THREE.BoxGeometry(.76, .72 * 200 / 1024 + .03, .02), new THREE.MeshLambertMaterial({ color: 0x2a3140, flatShading: true }));
+  fr.position.z = -.012; hud.add(fr);
+}
+const SW = 512, SH = 150;
+const sliderCv = mkCanvas(SW, SH), sliderG = sliderCv.getContext('2d'), sliderTex = canvasTex(sliderCv);
+const slider = new THREE.Mesh(new THREE.PlaneGeometry(.62, .62 * SH / SW), new THREE.MeshBasicMaterial({ map: sliderTex, fog: false, transparent: true }));
+slider.position.set(0.86, 1.12, -0.82); slider.lookAt(0, 1.4, 0); station.add(slider); scene.add(station);
+{
+  const fr = new THREE.Mesh(new THREE.BoxGeometry(.66, .62 * SH / SW + .04, .02), new THREE.MeshLambertMaterial({ color: 0x2a3140, flatShading: true }));
+  fr.position.z = -.012; slider.add(fr);
+  const leg = new THREE.Mesh(new THREE.CylinderGeometry(.02, .03, 1.05, 6), new THREE.MeshLambertMaterial({ color: 0x4a5160, flatShading: true }));
+  leg.position.set(0, -.6, -.05); slider.add(leg);
+}
+// panel de cámara: vista previa + botones de foto y video, apilado sobre la barra de esfuerzo
+const CW = 800, CH = 740;
+const capCvP = mkCanvas(CW, CH), capG = capCvP.getContext('2d'), capTex = canvasTex(capCvP);
+const capPanel = new THREE.Mesh(new THREE.PlaneGeometry(.5, .5 * CH / CW), new THREE.MeshBasicMaterial({ map: capTex, fog: false, transparent: true }));
+capPanel.position.set(0, .39, 0); slider.add(capPanel);
+{
+  const fr = new THREE.Mesh(new THREE.BoxGeometry(.54, .5 * CH / CW + .04, .02), new THREE.MeshLambertMaterial({ color: 0x2a3140, flatShading: true }));
+  fr.position.z = -.012; capPanel.add(fr);
+  const leg2 = new THREE.Mesh(new THREE.CylinderGeometry(.02, .02, .5, 6), new THREE.MeshLambertMaterial({ color: 0x4a5160, flatShading: true }));
+  leg2.position.set(0, -.1, -.05); capPanel.add(leg2);
+}
+let capButtons = [], capDirty = true;
+
+let menuButtons = [], hoverId = null, menuDirty = true, sliderDirty = true;
+const TXT = {
+  lat: {
+    sc: 'Cúbica simple (CS): 1 átomo por celda, NC = 6, FEA = 0,52, a = 2R. Es muy poco compacta: el único metal que la adopta es el Po-α.',
+    bcc: 'Cúbica centrada en el cuerpo (BCC): 2 átomos/celda, NC = 8, FEA = 0,68, a = 4R/√3. Fe-α, Cr, Mo, W, V, Nb. Desliza en {110}<111>; no tiene planos compactos, así que la tensión crítica es alta y depende mucho de la temperatura (transición dúctil-frágil).',
+    fcc: 'Cúbica centrada en las caras (FCC): 4 átomos/celda, NC = 12, FEA = 0,74, a = 2R√2. Cu, Al, Ni, Ag, Au, Fe-γ. Apilamiento ABCABC de planos {111}; 12 sistemas {111}<110> con tensión crítica baja → muy dúctil.',
+    hcp: 'Hexagonal compacta (HCP): 6 átomos por celda hexagonal, NC = 12, FEA = 0,74, c/a ideal 1,633. Mg, Zn, Ti-α, Co, Zr. Apilamiento ABAB; desliza sobre todo en el plano basal (0001)<11-20> (solo 3 sistemas): por eso macla con facilidad.'
+  },
+  help: {
+    vr: 'Gatillo: botones del menú, barra de τ (mantenelo apretado y deslizá) y elegir átomos.\nAgarre (lateral): agarrar y mover la red; con las dos manos a la vez: girar y escalar.\nStick derecho ↑↓: esfuerzo de corte τ (o el ángulo θ en límite de grano).\nStick izquierdo: girar la red (un eje por vez).\nA (derecho): acción del defecto · B (derecho): reiniciar el defecto.\nX (izquierdo): tomar foto · clic del stick izquierdo: empezar / detener video · Y (izquierdo): planos principales.\nEl panel CÁMARA (sobre la barra de τ) tiene vista previa y las opciones de captura. En SISTEMA: recentrar la red, resetear todo, sonido y salir de VR.',
+    pc: 'Clic: botones del menú, barra de τ y elegir átomos · Clic derecho sostenido: agarrar la red · Rueda: escala.\nWASD: caminar · ↑↓: esfuerzo de corte τ (o ángulo θ) · Q/E, ←/→, R/F: girar la red.\nEspacio: acción del defecto · B: reiniciar el defecto · Tab: siguiente defecto · 1-4: tipo de red.\nK: foto · V: video · G: planos principales · T: tamaño de átomos · I/O: sitios · P: parciales · C: carga cíclica · F: par de Frenkel · E: enlaces.\nJ: girar 90° · H: recentrar · Z: resetear todo · M: sonido · Esc: salir.'
+  },
+  mode: {
+    perfect: 'Con "Enlaces" ves las uniones a primeros vecinos (en los metales el enlace es metálico: iones positivos en un mar de electrones); su color indica si están comprimidos (azul) o estirados (rojo). Las líneas blancas marcan la celda unidad (los átomos de la celda se ven más claros). Con "Planos principales" recorrés los planos más importantes de la red: se marca el plano que pasa por el centro y las capas se colorean según su apilamiento (A, B, C…), con su distancia interplanar y densidad plana. Apuntá a un átomo y apretá el gatillo para ver sus primeros vecinos y el número de coordinación. Con "Sitios" ves los huecos octaédricos (celeste) o tetraédricos (violeta).',
+    vac: 'Vacancia: sitio de red vacío (marcado en rojo). Su concentración de equilibrio crece con T: Nv = N·exp(−Qv/kT). Los vecinos se relajan hacia el hueco. Gatillo sobre un átomo: lo sacás (o lo devolvés si apuntás al hueco). A: un vecino salta al hueco → así difunden los átomos sustitucionales. Par de Frenkel: un átomo se va a un intersticio y deja su vacancia.',
+    int: 'Intersticial: átomo chico (C, N, H, B) alojado en un hueco de la red. Gatillo: agregar en el sitio apuntado o quitar. A: salto a un sitio vecino (difusión intersticial, mucho más rápida que la sustitucional). El C entra en el hueco octaédrico; el del Fe-γ (FCC) es más grande que el del Fe-α (BCC): por eso la austenita disuelve hasta 2,11 % C y la ferrita solo 0,022 %. Fijate la distorsión tetragonal en BCC.',
+    sub: 'Sustitucional: el soluto reemplaza a un átomo del solvente (Zn en Cu = latón, Ni en Cu). Reglas de Hume-Rothery para solubilidad amplia: ΔR < 15 %, misma estructura, electronegatividad y valencia parecidas. Gatillo sobre un átomo: soluto grande (azul, comprime alrededor) → chico (verde, tracciona) → solvente. Estos campos de tensión traban dislocaciones: endurecimiento por solución sólida.',
+    edge: 'Dislocación de borde (⊥): un semiplano extra de átomos (turquesa) termina en la línea de dislocación. b ⟂ a la línea. Aplicá esfuerzo de corte τ (stick derecho, ↑↓ o la barra): por debajo de τc solo hay deformación elástica; por encima la dislocación se desliza fila por fila sobre el plano de deslizamiento (celeste) rompiendo solo los enlaces del núcleo. Al salir deja un escalón de tamaño b: eso es deformación plástica. En FCC podés disociarla en dos parciales de Shockley con una falla de apilamiento (violeta) en el medio.',
+    screw: 'Dislocación de tornillo (↺): b ∥ a la línea. Los planos atómicos forman una rampa helicoidal alrededor del núcleo. Bajo τ se mueve perpendicular a b; como b y la línea son paralelos puede cambiar de plano (deslizamiento cruzado). Girá la red (stick izquierdo o "Girar 90°") para ver la hélice. Mitad inferior más oscura para seguir el corrimiento.',
+    twin: 'Macla: región cuya red es la imagen especular de la original respecto del plano de macla (verde). Se forma por un corte homogéneo plano a plano. Aplicá τ por encima de τ macla y mirá avanzar el borde de macla capa por capa; con τ negativa se "desmacla". Común en HCP (Mg, Zn, Ti) y en BCC a baja T o alta velocidad; en FCC (latón, Cu) aparecen maclas de recocido. En HCP fijate los reacomodos (shuffles) atómicos.',
+    gb: 'Límite de grano: interfase entre dos cristales con distinta orientación (inclinación θ alrededor del eje que ves de frente). Bajo ángulo (θ < 15°): es una pared de dislocaciones de borde separadas D ≈ b/θ. Alto ángulo: región desordenada de mayor energía, camino rápido de difusión y obstáculo al deslizamiento (Hall-Petch: σy = σ0 + k·d^-½). Cambiá θ con el stick derecho, ↑↓ o la barra; A: ángulos típicos.'
+  }
+};
+
+function optButtons() {
+  const m = st.mode, pt = m === 'perfect' || m === 'vac' || m === 'int' || m === 'sub';
+  const stress = m === 'edge' || m === 'screw' || m === 'twin';
+  const aLbl = { perfect: '—', vac: 'Salto de vacancia (A)', int: 'Salto intersticial (A)', sub: 'Agregar soluto (A)', edge: L.id === 'fcc' ? 'Parciales (A)' : '—', screw: L.id === 'fcc' ? 'Parciales (A)' : '—', twin: '—', gb: 'Ángulo típico (A)' }[m];
+  return [
+    { id: 'size', label: 'Átomos: ' + (st.compact ? 'compactos' : 'reducidos'), on: st.compact, en: true },
+    { id: 'plane', label: st.plane > 0 && pt ? 'Plano: ' + PLANES[L.id][st.plane - 1].n : 'Planos principales', on: st.plane > 0 && pt, en: pt },
+    { id: 'sites', label: 'Sitios intersticiales', on: st.showSites, en: pt },
+    { id: 'stype', label: 'Sitio: ' + L.nombreSitio[st.siteType], on: false, en: pt && L.sites.tet.length > 0 },
+    { id: 'partials', label: 'Parciales de Shockley', on: st.partials, en: L.id === 'fcc' && (m === 'edge' || m === 'screw') },
+    { id: 'cyclic', label: 'Carga cíclica', on: st.cyclic, en: stress },
+    { id: 'frenkel', label: 'Par de Frenkel', on: false, en: m === 'vac' || m === 'int' },
+    { id: 'action', label: aLbl, on: false, en: aLbl !== '—' },
+    { id: 'reset', label: 'Reiniciar defecto (B)', on: false, en: true },
+    { id: 'rot', label: 'Girar 90°', on: false, en: true },
+    { id: 'bonds', label: 'Enlaces: ' + (st.bonds ? 'visibles' : 'ocultos'), on: st.bonds, en: true },
+  ];
+}
+
+function sysButtons() {
+  return [
+    { id: 'center', label: 'Recentrar red', on: false, en: true },
+    { id: 'resetall', label: 'Resetear todo', on: false, en: true },
+    { id: 'help', label: 'Controles', on: st.help, en: true },
+    { id: 'sound', label: 'Sonido: ' + (st.sound ? 'sí' : 'no'), on: st.sound, en: true },
+    { id: 'home', label: 'Inicio', on: false, en: true },
+    { id: 'exit', label: renderer.xr.isPresenting ? 'SALIR DE VR' : 'SALIR (soltar mouse)', on: false, en: true, danger: true },
+  ];
+}
+function drawLogo(g, x, y, w, h) {
+  if (logoOk) { const r = Math.min(w / logoImg.width, h / logoImg.height), iw = logoImg.width * r, ih = logoImg.height * r; g.drawImage(logoImg, x + (w - iw) / 2, y + (h - ih) / 2, iw, ih); return; }
+  // sin archivo de logo: marca de texto con la sigla de la facultad
+  rr(g, x, y, w, h, 14); g.fillStyle = '#1b2233'; g.fill(); g.lineWidth = 3; g.strokeStyle = '#ffd34d'; g.stroke();
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#ffd34d'; g.font = 'bold 44px system-ui, sans-serif'; g.fillText('UTN', x + w / 2, y + h * .36);
+  g.fillStyle = '#eef3ff'; g.font = 'bold 30px system-ui, sans-serif'; g.fillText('FRSN', x + w / 2, y + h * .72);
+}
+
+function button(g, b, big, list = menuButtons) {
+  const hov = hoverId === b.id && b.en !== false;
+  rr(g, b.x, b.y, b.w, b.h, 14);
+  g.fillStyle = b.en === false ? '#262c3a' : b.danger ? (hov ? '#c2423a' : '#8e2f2a') : b.on ? (hov ? '#3c8cff' : '#2d6fd6') : (hov ? '#3d4a66' : '#2e3850'); g.fill();
+  g.lineWidth = hov ? 4 : 2; g.strokeStyle = b.on ? '#9cc6ff' : hov ? '#9fb3d9' : '#46526e'; g.stroke();
+  g.fillStyle = b.en === false ? '#5e6779' : '#f1f5ff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  if (big) {
+    g.font = 'bold 44px system-ui, sans-serif'; g.fillText(b.label, b.x + b.w / 2, b.y + 38);
+    g.font = '19px system-ui, sans-serif'; g.fillStyle = b.on ? '#e5efff' : '#a9b4cc'; g.fillText(b.sub, b.x + b.w / 2, b.y + 78);
+  } else { g.font = (b.small ? '23px' : 'bold 27px') + ' system-ui, sans-serif'; g.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 1); }
+  list.push(b);
+}
+
+function drawMenu() {
+  const g = menuG; menuButtons = [];
+  g.clearRect(0, 0, MW, MH);
+  rr(g, 0, 0, MW, MH, 30); g.fillStyle = 'rgba(16,21,34,.94)'; g.fill();
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  drawLogo(g, 24, 16, 176, 100);
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillStyle = '#ffd34d'; g.font = 'bold 58px system-ui, sans-serif'; g.fillText(APP_NAME, 224, 66);
+  g.fillStyle = '#c9d4ea'; g.font = '23px system-ui, sans-serif'; g.fillText('Redes cristalinas y defectos · Metalurgia', 224, 96);
+  g.fillStyle = '#8fa0c0'; g.font = '19px system-ui, sans-serif'; g.fillText('UTN · Facultad Regional San Nicolás', 224, 121);
+  const sec = (t, y) => { g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.fillStyle = '#7f93b8'; g.font = 'bold 22px system-ui, sans-serif'; g.fillText(t, 30, y); };
+  sec('RED CRISTALINA', 158);
+  ['sc', 'bcc', 'fcc', 'hcp'].forEach((k, i) => button(g, { id: 'lat:' + k, label: LAT[k].corto, sub: LAT[k].nombre.replace('Cúbica centrada en', 'C. centrada en'), x: 24 + i * 248, y: 170, w: 234, h: 100, on: st.lat === k }, true));
+  sec('DEFECTO', 306);
+  MODES.forEach((m, i) => button(g, { id: 'mode:' + m.id, label: m.nombre, x: 24 + (i % 2) * 492, y: 320 + Math.floor(i / 2) * 78, w: 480, h: 68, on: st.mode === m.id }));
+  sec('OPCIONES', 654);
+  optButtons().forEach((o, i) => button(g, { ...o, small: true, x: 24 + (i % 3) * 330, y: 668 + Math.floor(i / 3) * 68, w: 316, h: 58 }));
+  // sección aparte: sistema (con la salida)
+  g.fillStyle = '#34405c'; g.fillRect(24, 946, MW - 48, 2);
+  sec('SISTEMA', 978);
+  const sb = sysButtons();
+  sb.slice(0, 3).forEach((o, i) => button(g, { ...o, small: true, x: 24 + i * 330, y: 992, w: 316, h: 58 }));
+  button(g, { ...sb[3], small: true, x: 24, y: 1060, w: 316, h: 58 });
+  button(g, { ...sb[4], small: true, x: 354, y: 1060, w: 316, h: 58 });
+  button(g, { ...sb[5], small: false, x: 684, y: 1060, w: MW - 708, h: 58 });
+  sec('INFORMACIÓN', 1150);
+  rr(g, 24, 1164, MW - 48, MH - 1188, 16); g.fillStyle = '#1b2233'; g.fill();
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillStyle = '#ffd34d'; g.font = 'bold 26px system-ui, sans-serif';
+  g.fillText(st.help ? 'Controles' : `${L.corto} · ${modeName(st.mode)}  —  ej.: ${L.ej}`, 44, 1202);
+  g.font = '22px system-ui, sans-serif';
+  if (st.help) { g.fillStyle = '#eef3ff'; wrap(g, renderer.xr.isPresenting ? TXT.help.vr : TXT.help.pc, 44, 1238, MW - 88, 28, MH - 34); }
+  else {
+    g.fillStyle = '#c9d4ea';
+    const y = wrap(g, TXT.lat[st.lat], 44, 1238, MW - 88, 28, MH - 40);
+    g.fillStyle = '#eef3ff';
+    wrap(g, TXT.mode[st.mode], 44, y + 10, MW - 88, 28, MH - 34);
+  }
+  menuTex.needsUpdate = true; menuDirty = false;
+}
+
+function sliderSpec() {
+  if (st.mode === 'gb') return { lbl: 'Ángulo de inclinación θ', sub: 'límite de grano', min: 0, max: 45, val: st.gbAngle, fmt: v => v.toFixed(1) + '°', marks: [[15, 'bajo / alto ángulo']] };
+  const tc = st.mode === 'twin' ? L.tauT : L.tauC;
+  return { lbl: 'Esfuerzo de corte τ', sub: 'barra = carga sostenida', min: -1, max: 1, val: st.tau, fmt: v => (v >= 0 ? '+' : '') + v.toFixed(2) + ' τmáx', marks: [[tc, 'τc'], [-tc, '−τc']], sliderVal: st.sliderTau };
+}
+function drawSlider() {
+  const g = sliderG, sp = sliderSpec(), active = ['edge', 'screw', 'twin', 'gb'].includes(st.mode);
+  g.clearRect(0, 0, SW, SH); rr(g, 0, 0, SW, SH, 18); g.fillStyle = 'rgba(16,21,34,.94)'; g.fill();
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.font = 'bold 19px system-ui, sans-serif'; g.fillStyle = active ? '#ffd34d' : '#5e6779';
+  g.fillText(active ? sp.lbl : 'Esfuerzo de corte (elegí dislocación o macla)', 18, 30);
+  if (active && sp.sub) { g.font = '15px system-ui, sans-serif'; g.fillStyle = '#8fa0c0'; g.fillText(sp.sub, 18, 52); }
+  const x0 = 24, x1 = SW - 24, y0 = 72, h = 26, X = v => x0 + (v - sp.min) / (sp.max - sp.min) * (x1 - x0);
+  rr(g, x0, y0, x1 - x0, h, 10); g.fillStyle = '#2e3850'; g.fill();
+  if (active) {
+    for (const [v] of sp.marks) { g.fillStyle = '#ff6a3d'; g.fillRect(X(v) - 2, y0 - 6, 4, h + 12); }
+    const zero = sp.min < 0 ? X(0) : x0, xv = X(sp.val);
+    g.fillStyle = Math.abs(sp.val) > (st.mode === 'gb' ? 99 : (st.mode === 'twin' ? L.tauT : L.tauC)) ? '#ff9f43' : '#4f9dff';
+    g.fillRect(Math.min(zero, xv), y0 + 4, Math.abs(xv - zero), h - 8);
+    if (sp.sliderVal !== undefined) { g.fillStyle = '#ffffff'; g.beginPath(); g.arc(X(sp.sliderVal), y0 + h / 2, 11, 0, 7); g.fill(); }
+    else { g.fillStyle = '#ffffff'; g.beginPath(); g.arc(xv, y0 + h / 2, 11, 0, 7); g.fill(); }
+    g.font = 'bold 26px system-ui, sans-serif'; g.fillStyle = '#eef3ff'; g.textAlign = 'right'; g.fillText(sp.fmt(sp.val), x1, 46);
+    g.font = '15px system-ui, sans-serif'; g.fillStyle = '#ff9f80'; g.textAlign = 'center';
+    for (const [v, t] of sp.marks) g.fillText(t, X(v), y0 + h + 22);
+  }
+  sliderTex.needsUpdate = true; sliderDirty = false;
+}
+
+// ===================== MODELO: CONSTRUCCIÓN =====================
+const tmpC = new THREE.Color();
+let BASECOL = new THREE.Color(), DARK = new THREE.Color();
+
+function setAtoms(list) {
+  N = Math.min(list.length, MAX);
+  for (let i = 0; i < N; i++) {
+    const p = list[i]; REF[i * 3] = p[0]; REF[i * 3 + 1] = p[1]; REF[i * 3 + 2] = p[2];
+    KIND[i] = 0; HID[i] = 0; GRP[i] = 0; INCELL[i] = 0; SITEOF[i] = -1; PLN[i] = 255; PLC[i] = 0;
+  }
+  CUR.set(REF.subarray(0, N * 3)); TGT.set(REF.subarray(0, N * 3));
+}
+
+function buildModel(quiet) {
+  L = LAT[st.lat]; SEL = -1; NEIGH = []; JUMP = null; NS = 0;
+  BASECOL.setHex(L.color); DARK.copy(BASECOL).multiplyScalar(.62);
+  crystal.scale.setScalar(baseScale() * userScale);
+  const m = st.mode;
+  if (m === 'perfect' || m === 'vac' || m === 'int' || m === 'sub') {
+    const d = buildBlock(L, m !== 'perfect');
+    setAtoms(d.atoms);
+    if (d.inCell) for (let i = 0; i < N; i++) INCELL[i] = d.inCell[i] ? 1 : 0;
+    NS = Math.min(d.sites.length, MAXS);
+    for (let i = 0; i < NS; i++) { const s = d.sites[i]; SITES.set(s.p, i * 3); SITET[i] = s.t; SITEOCC[i] = -1; }
+    MD = { kind: 'block', box: d.box, edges: d.edges, rows: d.rows };
+    if (m === 'vac') { HID[nearestAtom(0, 0, 0)] = 1; }
+    if (m === 'int') { const s = nearestSite(0, 0, 0, L.sites.tet.length ? st.siteType : 0); if (s >= 0) addInterstitial(s, 1); }
+    if (m === 'sub') {
+      KIND[nearestAtom(0, 0, 0)] = 2;
+      const k = nearestAtom(2.2 * L.nn, 0.2, 0.9 * L.nn); if (KIND[k] === 0) KIND[k] = 3;
+    }
+    relaxDirty = true;
+  } else if (m === 'edge' || m === 'screw') {
+    const d = buildDisl(L, m === 'screw');
+    setAtoms(d.atoms);
+    const valley = d.x0;
+    MD = { kind: 'disl', ...d, box: d.box, active: true, xd: valley, S: 0, delay: 0, cell: 0, R2: d.hx * d.hx, margin: 3 * L.nn, cores: [{ xc: 0, bx: 0, bz: 0, w: 1 }, { xc: 0, bx: 0, bz: 0, w: 1 }], nc: 1 };
+  } else if (m === 'twin') {
+    const d = buildTwin(L);
+    setAtoms(d.atoms);
+    for (let i = 0; i < N; i++) SHUF.set(d.shuffle[i], i * 3);
+    MD = { kind: 'twin', ...d, yf: 0, layer: 0 };
+  } else if (m === 'gb') {
+    const d = buildGB(L, st.gbAngle);
+    setAtoms(d.atoms);
+    for (let i = 0; i < N; i++) GRP[i] = d.grain[i];
+    MD = { kind: 'gb', ...d, built: st.gbAngle };
+  }
+  PLANE = null; if (MD.kind === 'block') computePlane();
+  buildGuides();
+  posDirty = colDirty = true; sliderDirty = true; if (!quiet) menuDirty = true;
+}
+
+function buildGuides() {
+  setLines(cellLines, []); setLines(neighLines, []); setLines(coreLines, []); setLines(arrowLines, []);
+  slipQuad.visible = twinQuad0.visible = twinQuad1.visible = gbQuad.visible = planeQuad.visible = false;
+  if (MD.kind === 'block' && st.mode === 'perfect' && MD.edges) setLines(cellLines, MD.edges.flatMap(e => [...e[0], ...e[1]]));
+  if (MD.kind === 'disl') { placeHQuad(slipQuad, 0, MD.box); }
+  if (MD.kind === 'twin') { placeHQuad(twinQuad0, 0, MD.box); placeHQuad(twinQuad1, 0, MD.box); }
+  if (MD.kind === 'gb') { gbQuad.rotation.set(0, Math.PI / 2, 0); gbQuad.position.set(0, 0, 0); gbQuad.scale.set(MD.box.z1 - MD.box.z0 + 2 * L.nn, MD.box.y1 - MD.box.y0 + 2 * L.nn, 1); }
+}
+
+// ---------- utilidades de defectos puntuales ----------
+function nearestAtom(x, y, z) { let b = -1, bd = 1e9; for (let i = 0; i < N; i++) { const dx = REF[i * 3] - x, dy = REF[i * 3 + 1] - y, dz = REF[i * 3 + 2] - z, d = dx * dx + dy * dy + dz * dz; if (d < bd && KIND[i] === 0) { bd = d; b = i; } } return b; }
+function nearestSite(x, y, z, type, free = true) { let b = -1, bd = 1e9; for (let i = 0; i < NS; i++) { if (type >= 0 && SITET[i] !== type) continue; if (free && SITEOCC[i] >= 0) continue; const dx = SITES[i * 3] - x, dy = SITES[i * 3 + 1] - y, dz = SITES[i * 3 + 2] - z, d = dx * dx + dy * dy + dz * dz; if (d < bd) { bd = d; b = i; } } return b; }
+function addInterstitial(site, kind, fromX) {
+  if (N >= MAX || SITEOCC[site] >= 0) return -1;
+  const i = N++; REF.set(SITES.subarray(site * 3, site * 3 + 3), i * 3);
+  KIND[i] = kind; HID[i] = 0; GRP[i] = 0; INCELL[i] = 0; SITEOF[i] = site; SITEOCC[site] = i; PLN[i] = 255; PLC[i] = 0;
+  if (fromX) { CUR.set(fromX, i * 3); JUMP = { i, from: fromX.slice(), to: [...REF.subarray(i * 3, i * 3 + 3)], t: 0, dur: .55 }; }
+  else CUR.set(REF.subarray(i * 3, i * 3 + 3), i * 3);
+  TGT.set(REF.subarray(i * 3, i * 3 + 3), i * 3);
+  relaxDirty = true; colDirty = true; return i;
+}
+function removeAtom(i) { // borrado por swap-remove
+  if (SITEOF[i] >= 0) SITEOCC[SITEOF[i]] = -1;
+  const last = --N;
+  if (i !== last) {
+    for (const A of [REF, CUR, TGT, SHUF]) { A[i * 3] = A[last * 3]; A[i * 3 + 1] = A[last * 3 + 1]; A[i * 3 + 2] = A[last * 3 + 2]; }
+    KIND[i] = KIND[last]; HID[i] = HID[last]; GRP[i] = GRP[last]; INCELL[i] = INCELL[last]; SITEOF[i] = SITEOF[last]; PLN[i] = PLN[last]; PLC[i] = PLC[last];
+    if (SITEOF[i] >= 0) SITEOCC[SITEOF[i]] = i;
+    if (SEL === last) SEL = i;
+  }
+  if (SEL === i && i === last) SEL = -1;
+  JUMP = null; relaxDirty = true; colDirty = true;
+}
+function strength(i) {
+  if (HID[i] && KIND[i] === 0) return -0.04;
+  switch (KIND[i]) {
+    case 1: return SITET[SITEOF[i]] === 0 ? (L.id === 'bcc' ? .09 : .08) : .06;
+    case 2: return .05; case 3: return -.045; case 4: return .15;
+  }
+  return 0;
+}
+function relax() { // campo de relajación ~1/r² alrededor de cada defecto puntual
+  const nn = L.nn, defs = [];
+  for (let i = 0; i < N; i++) { const s = strength(i); if (s) defs.push(i, s); }
+  for (let i = 0; i < N; i++) {
+    let ux = 0, uy = 0, uz = 0; const x = REF[i * 3], y = REF[i * 3 + 1], z = REF[i * 3 + 2];
+    if (!HID[i]) for (let k = 0; k < defs.length; k += 2) {
+      const j = defs[k]; if (j === i) continue;
+      const dx = x - REF[j * 3], dy = y - REF[j * 3 + 1], dz = z - REF[j * 3 + 2], r2 = dx * dx + dy * dy + dz * dz;
+      if (r2 > 9 * nn * nn || r2 < 1e-6) continue;
+      const r = Math.sqrt(r2), f = defs[k + 1] * nn * nn * nn / (r2 * r);
+      ux += dx * f; uy += dy * f; uz += dz * f;
+    }
+    const l = Math.hypot(ux, uy, uz), cap = .28 * nn; if (l > cap) { ux *= cap / l; uy *= cap / l; uz *= cap / l; }
+    TGT[i * 3] = x + ux; TGT[i * 3 + 1] = y + uy; TGT[i * 3 + 2] = z + uz;
+  }
+  relaxDirty = false; posDirty = true;
+}
+
+// ===================== PLANOS PRINCIPALES =====================
+const PLANES = {
+  sc: [{ hkl: [1, 0, 0], n: '(100)' }, { hkl: [1, 1, 0], n: '(110)' }, { hkl: [1, 1, 1], n: '(111)' }],
+  bcc: [{ hkl: [1, 1, 0], n: '(110)' }, { hkl: [1, 0, 0], n: '(100)' }, { hkl: [1, 1, 1], n: '(111)' }],
+  fcc: [{ hkl: [1, 1, 1], n: '(111)' }, { hkl: [1, 0, 0], n: '(100)' }, { hkl: [1, 1, 0], n: '(110)' }],
+  hcp: [{ hkl: [0, 0, 1], n: '(0001)', t: 'basal' }, { hkl: [1, 0, 0], n: '(10-10)', t: 'prismático' }, { hkl: [1, 0, 1], n: '(10-11)', t: 'piramidal' }]
+};
+const planeName = pd => pd.n + (pd.t ? ' ' + pd.t : '');
+const fmt = (v, k = 2) => v.toFixed(k).replace('.', ',');
+// Analiza una familia de planos sobre los átomos de red actuales. Si assign, marca la clase de apilamiento de cada átomo.
+function planeG(hkl) { // vector de la red recíproca (sin 2π): |G| = 1/d_hkl
+  const [a1, a2, a3] = L.cell, V = vdot(a1, vcross(a2, a3));
+  const b1 = vsc(vcross(a2, a3), 1 / V), b2 = vsc(vcross(a3, a1), 1 / V), b3 = vsc(vcross(a1, a2), 1 / V);
+  return vadd(vadd(vsc(b1, hkl[0]), vsc(b2, hkl[1])), vsc(b3, hkl[2]));
+}
+function analyzePlane(pd, assign) {
+  const G = planeG(pd.hkl), dh = 1 / vlen(G), nc = vnorm(G), R = MD.rows, n = [vdot(R[0], nc), vdot(R[1], nc), vdot(R[2], nc)];
+  let c = -1, bd = 1e9;
+  for (let i = 0; i < N; i++) if (SITEOF[i] < 0) { const r = REF[i * 3] ** 2 + REF[i * 3 + 1] ** 2 + REF[i * 3 + 2] ** 2; if (r < bd - 1e-9) { bd = r; c = i; } }
+  if (c < 0) return null;
+  const pc = n[0] * REF[c * 3] + n[1] * REF[c * 3 + 1] + n[2] * REF[c * 3 + 2], ts = [];
+  for (let i = 0; i < N; i++) if (SITEOF[i] < 0) ts.push(n[0] * REF[i * 3] + n[1] * REF[i * 3 + 1] + n[2] * REF[i * 3 + 2] - pc);
+  const srt = ts.slice().sort((a, b) => a - b), u = [];
+  for (const t of srt) if (!u.length || t - u[u.length - 1] > 1e-3) u.push(t);
+  const K = u.length;
+  const idC = u.findIndex(t => Math.abs(t) < 1e-3);
+  // período de apilamiento: menor traslación de red paralela a la normal → nº de capas distintas por período
+  let P = 1e9;
+  for (let j = 0; j < N; j++) {
+    if (SITEOF[j] >= 0 || j === c) continue;
+    const vx = REF[j * 3] - REF[c * 3], vy = REF[j * 3 + 1] - REF[c * 3 + 1], vz = REF[j * 3 + 2] - REF[c * 3 + 2], al = vx * n[0] + vy * n[1] + vz * n[2];
+    if (al > 1e-3 && al < P && Math.hypot(vx - al * n[0], vy - al * n[1], vz - al * n[2]) < 1e-3) P = al;
+  }
+  let m = 0; if (P < 1e8) for (const t of u) if (t > -1e-3 && t < P - 1e-3) m++;
+  const nv = L.basis.length / Math.abs(vdot(L.cell[0], vcross(L.cell[1], L.cell[2])));
+  // espaciado medio entre capas atómicas: d_hkl de la celda / nº de capas distintas que aportan los átomos de la base
+  const offs = [];
+  for (const b of L.basis) {
+    let r = vdot(nc, fracToCart(L, b)) % dh; if (r < 0) r += dh; if (r > dh - 1e-4) r = 0;
+    if (!offs.some(o => Math.abs(o - r) < 1e-4)) offs.push(r);
+  }
+  const dbar = dh / offs.length;
+  const out = { n, c, m, dbar, sigma: dbar * nv, P };
+  if (assign) {
+    let k = 0;
+    for (let i = 0; i < N; i++) {
+      if (SITEOF[i] >= 0) { PLN[i] = 255; PLC[i] = 0; continue; }
+      const t = ts[k++]; let id = 0, bt = 1e9;
+      for (let q = 0; q < K; q++) { const dd = Math.abs(t - u[q]); if (dd < bt) { bt = dd; id = q; } }
+      PLC[i] = id === idC ? 1 : 0;
+      PLN[i] = m > 0 ? (((id - idC) % m) + m) % m : 255;
+    }
+  }
+  return out;
+}
+function computePlane() {
+  PLANE = null; PLN.fill(255, 0, N); PLC.fill(0, 0, N);
+  if (MD.kind !== 'block' || st.plane <= 0) return;
+  const defs = PLANES[L.id], pd = defs[st.plane - 1];
+  const all = defs.map(d => analyzePlane(d, false)), me = analyzePlane(pd, true);
+  if (!me || all.some(a => !a)) return;
+  const smax = Math.max(...all.map(a => a.sigma)), compact = me.sigma >= smax - 1e-6;
+  const letters = 'ABCDEF'; let seq = '';
+  if (me.m > 0 && me.m <= 6) for (let i = 0; i < Math.max(4, me.m * 2); i++) seq += letters[i % me.m];
+  const apil = me.m === 1 ? 'todos los planos iguales (A A A…)' : seq ? 'apilamiento ' + seq + '…' : 'apilamiento de período largo (sin colorear)';
+  const B = MD.box, S = ((B.x1 - B.x0) + (B.y1 - B.y0) + (B.z1 - B.z0)) / 3 * 1.2;
+  const pos = [REF[me.c * 3], REF[me.c * 3 + 1], REF[me.c * 3 + 2]], nn_ = me.n;
+  planeQuad.position.set(pos[0], pos[1], pos[2]); planeQuad.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(nn_[0], nn_[1], nn_[2]));
+  planeQuad.scale.set(S, S, 1);
+  // vector contenido en el plano (n × ŷ, o n × x̂ si la normal es vertical) para ubicar la etiqueta en su borde
+  let ux = nn_[2], uy = 0, uz = -nn_[0];
+  if (Math.hypot(ux, uz) < .2) { ux = 0; uy = nn_[2]; uz = -nn_[1]; }
+  const ul = Math.hypot(ux, uy, uz) || 1;
+  PLANE = {
+    pd, me, lx: pos[0] + ux / ul * S * .5, ly: pos[1] + uy / ul * S * .5 + .05 * L.nn, lz: pos[2] + uz / ul * S * .5,
+    label: pd.n + (me.m > 1 && me.m <= 6 ? ' · ' + letters.slice(0, me.m) : ''),
+    info: `Plano ${planeName(pd)} · ${apil} · d = ${fmt(me.dbar, 3)} a · densidad plana = ${fmt(me.sigma)} át/a²${compact ? ' · plano más compacto' : ''}`
+  };
+}
+function cyclePlane() {
+  if (MD.kind !== 'block') return;
+  st.plane = (st.plane + 1) % (PLANES[L.id].length + 1);
+  computePlane(); colDirty = menuDirty = true; sfx('click');
+}
+
+// ===================== SIMULACIÓN POR MODO =====================
+const tmpU = [0, 0, 0];
+function simDisl(dt) {
+  const D = MD, b = D.b, tc = L.tauC, tau = st.tau, hop = D.hop;
+  const part = st.partials && D.partial, half = part ? D.partial.sep / 2 : 0;
+  const VMAX = 7 * L.nn;
+  if (D.active) {
+    if (Math.abs(tau) > tc) {
+      let v = Math.sign(tau) * VMAX * (Math.abs(tau) - tc) / (1 - tc);
+      const ph = (D.xd - D.x0) / hop; v *= .22 + .78 * Math.sin(Math.PI * ph) ** 2; // valles de Peierls
+      D.xd += v * dt;
+    } else { const t = D.x0 + Math.round((D.xd - D.x0) / hop) * hop; D.xd += (t - D.xd) * Math.min(1, dt * 5); }
+    const cell = Math.floor((D.xd - D.x0) / hop + .5);
+    if (cell !== D.cell) { D.cell = cell; if (Math.abs(D.xd) < D.hx) { sfx('tick', { f: L.id === 'bcc' ? 1500 : 1900 }); haptic('right', .25, 18); } }
+    if (D.xd - half > D.hx + D.margin) { D.S += 1; D.active = false; D.delay = .7; sfx('step'); haptic('right', .8, 70); haptic('left', .5, 50); }
+    else if (D.xd + half < -D.hx - D.margin) { D.active = false; D.delay = .7; sfx('step'); haptic('right', .8, 70); }
+  } else {
+    D.delay -= dt;
+    if (D.delay <= 0 && Math.abs(tau) > tc) {
+      D.active = true;
+      if (tau > 0) D.xd = -D.hx - D.margin - half + .01; else { D.S -= 1; D.xd = D.hx + D.margin + half - .01; }
+      D.cell = Math.floor((D.xd - D.x0) / hop + .5);
+    }
+  }
+  // núcleos
+  const cs = D.cores; let nc = 0;
+  if (D.active) {
+    const fade = x => clamp(1 - Math.max(0, Math.abs(x) - D.hx) / D.margin, 0, 1);
+    if (part) {
+      const R = D.partial.R, Lp = D.partial.L;
+      Object.assign(cs[0], { xc: D.xd + half, bx: R[0], bz: R[1], w: fade(D.xd + half) });
+      Object.assign(cs[1], { xc: D.xd - half, bx: Lp[0], bz: Lp[1], w: fade(D.xd - half) }); nc = 2;
+    } else { Object.assign(cs[0], D.screw ? { xc: D.xd, bx: 0, bz: b, w: fade(D.xd) } : { xc: D.xd, bx: b, bz: 0, w: fade(D.xd) }); nc = 1; }
+  }
+  D.nc = nc;
+  const el = clamp(tau, -1, 1) * .05; // deformación elástica (corte) visible
+  for (let i = 0; i < N; i++) {
+    const x = REF[i * 3], y = REF[i * 3 + 1], z = REF[i * 3 + 2];
+    dislDisp(x, y, cs, nc, D.R2, tmpU);
+    const slip = D.S * b * (y > 0 ? .5 : -.5);
+    if (D.screw) { tmpU[2] += slip + el * y; } else { tmpU[0] += slip + el * y; }
+    TGT[i * 3] = x + tmpU[0]; TGT[i * 3 + 1] = y + tmpU[1]; TGT[i * 3 + 2] = z + tmpU[2];
+  }
+  markHalfPlane(D);
+  posDirty = colDirty = true;
+}
+
+// semiplano extra de la dislocación de borde: columnas (de ancho b) que terminan en el núcleo
+function markHalfPlane(D) {
+  GRP.fill(0, 0, N);
+  if (D.screw || !D.active || !D.nc) return;
+  let xc = 0, best = 1e9, side = 1;
+  for (let i = 0; i < N; i++) {
+    if (Math.abs(REF[i * 3 + 1] - D.d / 2) > 1e-4) continue;
+    const dd = TGT[i * 3] - D.xd;
+    if (Math.abs(dd) < best) { best = Math.abs(dd); xc = REF[i * 3]; side = dd > 0 ? -1 : 1; }
+  }
+  const span = (Math.round(D.b / D.hop) - 1) * D.hop;
+  for (let i = 0; i < N; i++) {
+    if (REF[i * 3 + 1] <= 0) continue;
+    const dx = (REF[i * 3] - xc) * side;
+    if (dx > -1e-3 && dx < span + 1e-3) GRP[i] = 1;
+  }
+}
+
+function simTwin(dt) {
+  const T = MD, tc = L.tauT, tau = st.tau;
+  if (Math.abs(tau) > tc) T.yf = clamp(T.yf + Math.sign(tau) * 2.2 * T.y1 * (Math.abs(tau) - tc) / (1 - tc) * dt, 0, T.ytop + .01);
+  const u = T.yf / T.y1, yd = T.y1 * (Math.floor(u) + smooth((u % 1) * 1.25));
+  const layer = Math.floor(u + 1e-6);
+  if (layer !== T.layer) { const up = layer > T.layer; T.layer = layer; sfx('crackle', { up }); haptic('right', .45, 30); }
+  T.yd = yd;
+  const sx = T.sY[0], sy = T.sY[1], sz = T.sY[2];
+  for (let i = 0; i < N; i++) {
+    const x = REF[i * 3], y = REF[i * 3 + 1], z = REF[i * 3 + 2];
+    let ox = 0, oy = 0, oz = 0;
+    if (y > 1e-4) {
+      if (y <= yd + 1e-3) { ox = sx * y + SHUF[i * 3]; oy = sy * y + SHUF[i * 3 + 1]; oz = sz * y + SHUF[i * 3 + 2]; }
+      else { ox = sx * yd; oy = sy * yd; oz = sz * yd; }
+    }
+    TGT[i * 3] = x + ox; TGT[i * 3 + 1] = y + oy; TGT[i * 3 + 2] = z + oz;
+  }
+  posDirty = colDirty = true;
+}
+
+let gbTimer = 0;
+function simGB(dt) {
+  gbTimer -= dt;
+  if (Math.abs(MD.built - st.gbAngle) > .05 && gbTimer <= 0) { gbTimer = .12; buildModel(true); }
+}
+
+// ===================== COLORES Y MATRICES =====================
+const STACKC = [null, new THREE.Color(0x59b8ff), new THREE.Color(0xff7ad9), new THREE.Color(0xa6e35a), new THREE.Color(0xffb04d), new THREE.Color(0xb59bff)], WHITE = new THREE.Color(0xffffff), HALF = new THREE.Color(0x1fe0c0), YEL = new THREE.Color(0xffd34d), MAG = new THREE.Color(0xd65ae0), GRN = new THREE.Color(0x58e0a0), BLU = new THREE.Color(0x6aa8ff), RED = new THREE.Color(0xff5a5a), NEI = new THREE.Color(0xffe066);
+const kc = {}; for (const k in KCOL) kc[k] = new THREE.Color(KCOL[k]);
+function updateColors() {
+  const a = atoms.instanceColor.array, m = st.mode, nn = L.nn;
+  const D = MD.kind === 'disl' ? MD : null;
+  for (let i = 0; i < N; i++) {
+    tmpC.copy(KIND[i] ? kc[KIND[i]] : BASECOL);
+    if (KIND[i] === 4) tmpC.copy(BASECOL).lerp(YEL, .45);
+    if (PLN[i] !== 255 && KIND[i] === 0) { const sc = STACKC[PLN[i]]; if (sc) tmpC.lerp(sc, .6); if (PLC[i]) tmpC.lerp(WHITE, .4); }
+    const y = REF[i * 3 + 1];
+    if (m === 'perfect' && MD.edges && MD.edges.length && !INCELL[i]) tmpC.multiplyScalar(.55);
+    if (D) {
+      if (y < 0) tmpC.multiplyScalar(.74);
+      const cx = CUR[i * 3], cy = CUR[i * 3 + 1];
+      for (let k = 0; k < D.nc; k++) { const c = D.cores[k]; if (c.w > .3 && Math.hypot(cx - c.xc, cy) < 1.05 * nn) tmpC.lerp(YEL, .75); }
+      if (GRP[i]) tmpC.lerp(HALF, .85);
+      if (D.nc === 2 && Math.abs(y) < D.d && REF[i * 3] > D.cores[1].xc && REF[i * 3] < D.cores[0].xc) tmpC.lerp(MAG, .7);
+    }
+    if (MD.kind === 'twin' && y > 1e-4 && y <= (MD.yd || 0) + 1e-3) tmpC.lerp(GRN, .5);
+    if (MD.kind === 'gb' && GRP[i]) tmpC.lerp(BLU, .35);
+    if (i === SEL) tmpC.copy(RED);
+    a[i * 3] = tmpC.r; a[i * 3 + 1] = tmpC.g; a[i * 3 + 2] = tmpC.b;
+  }
+  for (const j of NEIGH) { a[j * 3] = NEI.r; a[j * 3 + 1] = NEI.g; a[j * 3 + 2] = NEI.b; }
+  atoms.instanceColor.needsUpdate = true; colDirty = false;
+}
+
+function updateMatrices(dt) {
+  const k = 1 - Math.exp(-dt * (MD.kind === 'block' ? 9 : 22));
+  const arr = atoms.instanceMatrix.array, sz = (st.compact ? 1 : .5) * L.R;
+  let moving = false;
+  for (let i = 0; i < N; i++) {
+    let x = CUR[i * 3], y = CUR[i * 3 + 1], z = CUR[i * 3 + 2];
+    const dx = TGT[i * 3] - x, dy = TGT[i * 3 + 1] - y, dz = TGT[i * 3 + 2] - z;
+    if (dx * dx + dy * dy + dz * dz > 1e-10) { x += dx * k; y += dy * k; z += dz * k; moving = true; CUR[i * 3] = x; CUR[i * 3 + 1] = y; CUR[i * 3 + 2] = z; }
+    if (JUMP && JUMP.i === i) { // salto difusivo en arco
+      const t = smooth(JUMP.t / JUMP.dur), f = JUMP.from, to = JUMP.to, h = Math.sin(Math.PI * t) * .3 * L.nn;
+      x = f[0] + (to[0] - f[0]) * t; y = f[1] + (to[1] - f[1]) * t + h; z = f[2] + (to[2] - f[2]) * t; moving = true;
+      CUR[i * 3] = x; CUR[i * 3 + 1] = y; CUR[i * 3 + 2] = z;
+    }
+    const s = HID[i] ? 0 : sz * KRAD[KIND[i]], o = i * 16;
+    arr[o] = s; arr[o + 1] = 0; arr[o + 2] = 0; arr[o + 3] = 0; arr[o + 4] = 0; arr[o + 5] = s; arr[o + 6] = 0; arr[o + 7] = 0;
+    arr[o + 8] = 0; arr[o + 9] = 0; arr[o + 10] = s; arr[o + 11] = 0; arr[o + 12] = x; arr[o + 13] = y; arr[o + 14] = z; arr[o + 15] = 1;
+  }
+  atoms.count = N; atoms.instanceMatrix.needsUpdate = true;
+  posDirty = moving;
+  // vacancias y sitios
+  const m4 = new THREE.Matrix4(); let nv = 0;
+  for (let i = 0; i < N && nv < MAXV; i++) if (HID[i]) { const s = .2 * L.nn; m4.makeScale(s, s, s).setPosition(REF[i * 3], REF[i * 3 + 1], REF[i * 3 + 2]); vacMesh.setMatrixAt(nv++, m4); }
+  vacMesh.count = nv; vacMesh.instanceMatrix.needsUpdate = true;
+}
+const SITECOL = [new THREE.Color(0x5fd8ff), new THREE.Color(0xc77dff)];
+function updateSites() {
+  let n = 0; const m4 = new THREE.Matrix4();
+  if (st.showSites && MD.kind === 'block') for (let i = 0; i < NS; i++) {
+    if (SITEOCC[i] >= 0) continue;
+    if (L.sites.tet.length && SITET[i] !== st.siteType) continue;
+    const s = (SITET[i] ? .07 : .1) * L.nn; m4.makeScale(s, s, s).setPosition(SITES[i * 3], SITES[i * 3 + 1], SITES[i * 3 + 2]);
+    siteMesh.setMatrixAt(n, m4); siteMesh.setColorAt(n, SITECOL[SITET[i]]); n++;
+  }
+  siteMesh.count = n; siteMesh.instanceMatrix.needsUpdate = true; if (siteMesh.instanceColor) siteMesh.instanceColor.needsUpdate = true;
+}
+
+// ---------- vecinos del átomo seleccionado ----------
+let neighTimer = 0;
+function updateNeighbors() {
+  NEIGH = []; if (SEL < 0 || SEL >= N || HID[SEL]) { SEL = -1; setLines(neighLines, []); return; }
+  const segs = [], x = CUR[SEL * 3], y = CUR[SEL * 3 + 1], z = CUR[SEL * 3 + 2], lim = 1.12 * L.nn;
+  for (let j = 0; j < N; j++) {
+    if (j === SEL || HID[j]) continue;
+    const dx = CUR[j * 3] - x, dy = CUR[j * 3 + 1] - y, dz = CUR[j * 3 + 2] - z;
+    if (dx * dx + dy * dy + dz * dz < lim * lim) { NEIGH.push(j); if (segs.length < 96) segs.push(x, y, z, CUR[j * 3], CUR[j * 3 + 1], CUR[j * 3 + 2]); }
+  }
+  setLines(neighLines, segs); colDirty = true;
+}
+
+// ---------- guías dinámicas (núcleos, b, planos) ----------
+function updateGuides() {
+  spriteN = 0;
+  const show = st.guides, nn = L.nn;
+  slipQuad.visible = show && MD.kind === 'disl';
+  twinQuad0.visible = twinQuad1.visible = show && MD.kind === 'twin';
+  gbQuad.visible = show && MD.kind === 'gb';
+  if (MD.kind === 'disl') {
+    const D = MD, segs = [], arr = [], zf = D.box.z1 + .45 * nn;
+    for (let k = 0; k < D.nc; k++) {
+      const c = D.cores[k]; if (c.w < .05) continue;
+      segs.push(c.xc, 0, D.box.z0 - .3 * nn, c.xc, 0, D.box.z1 + .3 * nn);
+      if (show) useSprite(symbolTex(D.screw ? 'screw' : 'edge'), c.xc, D.screw ? 0 : -.12 * nn, zf + .2 * nn, D.nc === 2 ? .028 : .04, 1);
+    }
+    setLines(coreLines, show ? segs : []);
+    if (show && D.nc) {
+      const xc = D.xd, y = -D.hy - .5 * nn;
+      if (!D.screw) arr.push(xc - D.b / 2, y, zf, xc + D.b / 2, y, zf, xc + D.b / 2, y, zf, xc + D.b / 2 - .15 * nn, y + .1 * nn, zf, xc + D.b / 2, y, zf, xc + D.b / 2 - .15 * nn, y - .1 * nn, zf);
+      else arr.push(xc, y, zf, xc, y, zf + D.b, xc, y, zf + D.b, xc + .1 * nn, y, zf + D.b - .15 * nn, xc, y, zf + D.b, xc - .1 * nn, y, zf + D.b - .15 * nn);
+      useSprite(textTex('b'), xc + (D.screw ? .25 * nn : 0), y - .3 * nn, zf, .03, 4);
+    }
+    setLines(arrowLines, arr);
+    if (show && D.S !== 0) useSprite(textTex(`escalón: ${D.S > 0 ? '+' : ''}${D.S}·b`, '#9cd0ff'), D.box.x1, D.box.y1 + .7 * nn, 0, .03, 4);
+  } else { setLines(coreLines, []); setLines(arrowLines, []); }
+  planeQuad.visible = !!PLANE && MD.kind === 'block';
+  if (planeQuad.visible) useSprite(textTex(PLANE.label, '#ffe9a0'), PLANE.lx, PLANE.ly, PLANE.lz, .032, 4);
+  if (MD.kind === 'twin' && show) {
+    twinQuad1.position.y = MD.yd || 0; twinQuad1.position.x = (MD.box.x0 + MD.box.x1) / 2 + MD.sY[0] * (MD.yd || 0);
+    useSprite(textTex('plano de macla ' + L.twin.label, '#9dffcf'), MD.box.x1 + .5 * nn, 0, MD.box.z1, .03, 4);
+  }
+  if (MD.kind === 'gb' && show) useSprite(textTex(`θ = ${st.gbAngle.toFixed(1)}°`, '#ffc27a'), 0, MD.box.y1 + .7 * nn, MD.box.z1, .03, 4);
+  if (SEL >= 0 && NEIGH.length) useSprite(textTex('NC = ' + NEIGH.length, '#ffe066'), CUR[SEL * 3], CUR[SEL * 3 + 1] + .6 * nn, CUR[SEL * 3 + 2], .028, 4);
+  for (let i = spriteN; i < sprites.length; i++) sprites[i].s.visible = false;
+}
+const _w = new THREE.Vector3();
+function placeSprites() { // tamaño angular constante
+  for (let i = 0; i < spriteN; i++) {
+    const o = sprites[i]; _w.copy(o.local); crystal.localToWorld(_w); o.s.position.copy(_w);
+    const d = _w.distanceTo(head.pos), h = d * o.size; o.s.scale.set(h * o.aspect, h, 1);
+    o.s.material.rotation = head.alabeo;
+  }
+}
+
+// ===================== AUDIO (AudioWorklet desde Blob) =====================
+const WORKLET = `
+class BQ { constructor(){ this.b0=1; this.b1=0; this.b2=0; this.a1=0; this.a2=0; this.x1=0; this.x2=0; this.y1=0; this.y2=0; }
+  set(t,f,q,sr){ const w=2*Math.PI*Math.min(f,sr*.45)/sr, c=Math.cos(w), s=Math.sin(w), al=s/(2*q); let b0,b1,b2; const a0=1+al, a1=-2*c, a2=1-al;
+    if(t==='lp'){ b0=(1-c)/2; b1=1-c; b2=(1-c)/2; } else if(t==='hp'){ b0=(1+c)/2; b1=-(1+c); b2=(1+c)/2; } else { b0=al; b1=0; b2=-al; }
+    this.b0=b0/a0; this.b1=b1/a0; this.b2=b2/a0; this.a1=a1/a0; this.a2=a2/a0; }
+  p(x){ const y=this.b0*x+this.b1*this.x1+this.b2*this.x2-this.a1*this.y1-this.a2*this.y2; this.x2=this.x1; this.x1=x; this.y2=this.y1; this.y1=y; return y; } }
+class Synth extends AudioWorkletProcessor {
+  constructor(){ super(); this.sr=sampleRate; this.st={ tau:0, speed:0, on:1 }; this.v=[]; this.ph=[0,0,0]; this.t=0;
+    this.cr=new BQ(); this.cr2=new BQ(); this.hum=new BQ(); this.hum.set('lp',300,.7,this.sr); this.g=0; this.on=1;
+    this.port.onmessage = e => { const m=e.data; if(m.t==='st') Object.assign(this.st,m); else if(m.t==='ev') this.ev(m); }; }
+  ev(m){ if(this.v.length>24) this.v.shift(); const f=new BQ(), sr=this.sr; const v={ k:m.k, t:0, pan:m.pan||0, f:m.f||1000, g:m.g||1, up:m.up, flt:f, ph:0, ph2:0, ph3:0 };
+    if(m.k==='tick'){ v.dur=.16; f.set('hp',2500,.7,sr); } else if(m.k==='click'){ v.dur=.05; } else if(m.k==='pop'){ v.dur=.16; }
+    else if(m.k==='jump'){ v.dur=.5; f.set('bp',500,3,sr); } else if(m.k==='step'){ v.dur=.45; f.set('lp',400,.8,sr); }
+    else if(m.k==='crackle'){ v.dur=.12; f.set('bp',3200,2.5,sr); } else if(m.k==='grab'){ v.dur=.12; } else if(m.k==='shutter'){ v.dur=.22; f.set('bp',2800,1.4,sr); } else v.dur=.2;
+    this.v.push(v); }
+  process(_, outs){ const o=outs[0], L=o[0], R=o[1]||o[0], n=L.length, sr=this.sr, st=this.st, TAU=2*Math.PI;
+    const tgtOn = st.on?1:0; const cf = 220 + 900*Math.abs(st.tau); this.cr.set('bp', cf, 5, sr); this.cr2.set('bp', cf*2.3, 6, sr);
+    for(let i=0;i<n;i++){ this.on += (tgtOn-this.on)*.0005; this.t += 1/sr;
+      // zumbido ambiente suave
+      this.ph[0]+=55/sr; this.ph[1]+=82.6/sr; this.ph[2]+=0.13/sr;
+      let amb = (Math.sin(TAU*this.ph[0])*.5 + Math.sin(TAU*this.ph[1])*.35) * (.03 + .015*Math.sin(TAU*this.ph[2]));
+      // crujido de la red bajo tensión
+      const nz = Math.random()*2-1, lvl = .03*Math.abs(st.tau) + .5*st.speed*Math.abs(st.tau);
+      let cr = (this.cr.p(nz) + .5*this.cr2.p(nz)) * lvl;
+      let l = amb + cr, r = amb + cr;
+      for(let k=this.v.length-1;k>=0;k--){ const v=this.v[k]; const u=v.t/v.dur; if(u>=1){ this.v.splice(k,1); continue; }
+        let s=0;
+        if(v.k==='tick'){ const e=Math.exp(-v.t*38); v.ph+=v.f/sr; v.ph2+=v.f*2.76/sr; v.ph3+=v.f*5.4/sr;
+          s = (Math.sin(TAU*v.ph)*.5+Math.sin(TAU*v.ph2)*.3+Math.sin(TAU*v.ph3)*.15)*e*.5 + v.flt.p(Math.random()*2-1)*Math.exp(-v.t*300)*.4; }
+        else if(v.k==='click'){ v.ph += (1500-9000*v.t)/sr; s=Math.sin(TAU*v.ph)*Math.exp(-v.t*70)*.35; }
+        else if(v.k==='pop'){ const f = v.up? 300+1400*u : 1100-800*u; v.ph+=f/sr; s=Math.sin(TAU*v.ph)*Math.sin(Math.PI*u)*.35; }
+        else if(v.k==='jump'){ v.flt.set('bp',400+2200*Math.sin(Math.PI*u),3,sr); s=v.flt.p(Math.random()*2-1)*Math.sin(Math.PI*u)*.9; }
+        else if(v.k==='step'){ v.ph+=(95-40*u)/sr; s=Math.sin(TAU*v.ph)*Math.exp(-v.t*9)*.7 + v.flt.p(Math.random()*2-1)*Math.exp(-v.t*25)*.6; }
+        else if(v.k==='crackle'){ const imp = Math.random()<.02 ? (Math.random()*2-1) : 0; s=v.flt.p(imp*6 + (Math.random()*2-1)*.15)*(1-u)*.8; }
+        else if(v.k==='shutter'){ s=v.flt.p(Math.random()*2-1)*Math.exp(-v.t*30)*1.1+Math.sin(TAU*1200*v.t)*Math.exp(-v.t*90)*.3; }
+        else if(v.k==='grab'){ v.ph+=(v.up?330:220)/sr; s=Math.sin(TAU*v.ph)*Math.sin(Math.PI*u)*.2; }
+        s*=v.g; const p=(v.pan+1)*Math.PI/4; l+=s*Math.cos(p); r+=s*Math.sin(p); v.t+=1/sr; }
+      L[i]=Math.tanh(l*1.3*this.on)*.85; R[i]=Math.tanh(r*1.3*this.on)*.85; }
+    return true; } }
+registerProcessor('synth', Synth);`;
+const audio = { ctx: null, node: null, ready: false };
+async function initAudio() {
+  if (audio.ctx) { if (audio.ctx.state !== 'running') audio.ctx.resume(); return; }
+  try {
+    audio.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+    await audio.ctx.audioWorklet.addModule(url);
+    audio.node = new AudioWorkletNode(audio.ctx, 'synth', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+    audio.node.connect(audio.ctx.destination);
+    audio.dest = audio.ctx.createMediaStreamDestination(); audio.node.connect(audio.dest); // para que el video grabado lleve el sonido
+    audio.ready = true; audio.ctx.resume();
+  } catch (e) { console.warn('Audio no disponible', e); }
+}
+addEventListener('pointerdown', initAudio); addEventListener('keydown', initAudio);
+renderer.xr.addEventListener('sessionstart', () => { initAudio(); renderer.xr.setFoveation(1); pendingAnchor = 3; menuDirty = true; });
+renderer.xr.addEventListener('sessionend', () => { if (cap.items.length) galOpen = true; updateGalleryVis(); menuDirty = true; for (const k of Object.keys(grabbers)) endGrab(k); placeStation(new THREE.Vector3(0, 0, 0), 0); homeCrystal(); });
+
+// ---------- reubicar / resetear / salir ----------
+let pendingAnchor = 0;
+function placeStation(pos, yawAng) { station.position.set(pos.x, 0, pos.z); station.rotation.set(0, yawAng, 0); station.updateMatrixWorld(true); }
+function homeCrystal() {
+  crystal.position.copy(HOME).applyMatrix4(station.matrixWorld);
+  crystal.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), station.rotation.y);
+  userScale = 1; crystal.scale.setScalar(baseScale());
+}
+function anchorToHead() { placeStation(head.pos, -head.rumbo); homeCrystal(); }
+function resetAll() {
+  for (const k of Object.keys(grabbers)) endGrab(k);
+  st.sliderTau = 0; st.keyTau = 0; st.cyclic = false; st.gbAngle = 8; drag = null;
+  if (!renderer.xr.isPresenting) { camera.position.set(0, 1.7, 0); yaw = 0; pitch = -0.2; camera.rotation.set(pitch, yaw, 0, 'YXZ'); camera.updateMatrixWorld(); updateHead(); placeStation(new THREE.Vector3(), 0); homeCrystal(); }
+  else anchorToHead();
+  buildModel(); sfx('step'); haptic('right', .5, 40); haptic('left', .5, 40);
+}
+function exitApp() {
+  const s = renderer.xr.getSession();
+  if (s) s.end(); else if (document.pointerLockElement) document.exitPointerLock();
+}
+const _pv = new THREE.Vector3();
+function panOf(obj) { obj.getWorldPosition(_pv); _pv.sub(head.pos).normalize(); return clamp(_pv.dot(head.right), -1, 1); }
+function sfx(k, o = {}) { if (audio.ready && st.sound) audio.node.port.postMessage({ t: 'ev', k, pan: o.pan ?? panOf(crystal), ...o }); }
+
+// ===================== CABEZA =====================
+const head = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), inv: new THREE.Quaternion(), fwd: new THREE.Vector3(), up: new THREE.Vector3(), right: new THREE.Vector3(), rumbo: 0, incl: 0, alabeo: 0 };
+const _s = new THREE.Vector3();
+function updateHead() {
+  camera.matrixWorld.decompose(head.pos, head.quat, _s);
+  head.inv.copy(head.quat).invert();
+  head.fwd.set(0, 0, -1).applyQuaternion(head.quat); head.up.set(0, 1, 0).applyQuaternion(head.quat); head.right.set(1, 0, 0).applyQuaternion(head.quat);
+  head.rumbo = Math.atan2(head.fwd.x, -head.fwd.z);       // 0 = Norte (−Z), positivo hacia el Este
+  head.incl = Math.asin(clamp(head.fwd.y, -1, 1));
+  head.alabeo = Math.atan2(-head.right.y, head.up.y);
+}
+
+// ===================== ENTRADA =====================
+const ray = new THREE.Raycaster();
+const hands = { left: null, right: null }; // {ctrl, grip, line, dot}
+const pads = { left: {}, right: {} }, prevPads = { left: {}, right: {} };
+function buildControllerModel() {
+  const g = new THREE.Group(), mat = new THREE.MeshLambertMaterial({ color: 0x2b2f38, flatShading: true });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(.018, .022, .11, 8), mat); body.rotation.x = Math.PI / 2 - .5; body.position.set(0, -.015, .03); g.add(body);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(.04, .006, 4, 10), new THREE.MeshLambertMaterial({ color: 0x5a6070, flatShading: true }));
+  ring.position.set(0, .01, -.03); ring.rotation.x = .9; g.add(ring); return g;
+}
+const allHands = [];
+for (let i = 0; i < 2; i++) {
+  const ctrl = renderer.xr.getController(i), grip = renderer.xr.getControllerGrip(i);
+  scene.add(ctrl, grip); grip.add(buildControllerModel());
+  const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
+  const line = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0x9cd0ff, transparent: true, opacity: .8, fog: false })); line.visible = false; ctrl.add(line);
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(.008, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, fog: false })); dot.renderOrder = 998; dot.visible = false; scene.add(dot);
+  const h = { ctrl, grip, line, dot }; allHands.push(h);
+  ctrl.addEventListener('connected', e => { const hd = e.data.handedness === 'left' ? 'left' : 'right'; hands[hd] = h; h.hand = hd; line.visible = true; });
+  ctrl.addEventListener('disconnected', () => { if (h.hand && hands[h.hand] === h) hands[h.hand] = null; line.visible = false; dot.visible = false; });
+}
+function haptic(hand, i, ms) {
+  const s = renderer.xr.getSession(); if (!s) return;
+  for (const src of s.inputSources) if (src.handedness === hand && src.gamepad && src.gamepad.hapticActuators && src.gamepad.hapticActuators[0]) { try { src.gamepad.hapticActuators[0].pulse(i, ms); } catch (e) { } }
+}
+
+// ---------- agarre de la red (una o dos manos) ----------
+const grabbers = {}; let two = null;
+const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _sc = new THREE.Vector3();
+function regrab() {
+  crystal.updateMatrixWorld(); const ks = Object.keys(grabbers); two = null;
+  if (ks.length === 1) { const g = grabbers[ks[0]]; g.obj.updateMatrixWorld(); g.off = new THREE.Matrix4().copy(g.obj.matrixWorld).invert().multiply(crystal.matrixWorld); }
+  else if (ks.length >= 2) {
+    const a = grabbers[ks[0]].obj.getWorldPosition(new THREE.Vector3()), b = grabbers[ks[1]].obj.getWorldPosition(new THREE.Vector3());
+    two = { k0: ks[0], k1: ks[1], d0: a.distanceTo(b), v0: b.clone().sub(a).normalize(), mid0: a.clone().add(b).multiplyScalar(.5), pos0: crystal.position.clone(), q0: crystal.quaternion.clone(), s0: crystal.scale.x };
+  }
+}
+function startGrab(k, obj) { grabbers[k] = { obj }; regrab(); sfx('grab', { up: true }); haptic(k, .4, 25); }
+function endGrab(k) { if (!grabbers[k]) return; delete grabbers[k]; regrab(); sfx('grab', { up: false }); }
+function updateGrab() {
+  const ks = Object.keys(grabbers);
+  for (const k of ks) grabbers[k].obj.updateMatrixWorld(true);
+  if (ks.length === 1) { const g = grabbers[ks[0]]; _m.multiplyMatrices(g.obj.matrixWorld, g.off); _m.decompose(crystal.position, crystal.quaternion, _sc); }
+  else if (two) {
+    const a = grabbers[two.k0].obj.getWorldPosition(new THREE.Vector3()), b = grabbers[two.k1].obj.getWorldPosition(new THREE.Vector3());
+    const d = Math.max(a.distanceTo(b), .01), v = b.clone().sub(a).normalize(), mid = a.clone().add(b).multiplyScalar(.5);
+    const f = clamp(d / two.d0, .2 / (two.s0 / baseScale()), 6 / (two.s0 / baseScale()));
+    _q.setFromUnitVectors(two.v0, v);
+    crystal.scale.setScalar(two.s0 * f);
+    crystal.quaternion.copy(_q).multiply(two.q0);
+    crystal.position.copy(two.pos0).sub(two.mid0).applyQuaternion(_q).multiplyScalar(f).add(mid);
+    userScale = crystal.scale.x / baseScale();
+  }
+}
+
+// ---------- interacción por rayo ----------
+const _o = new THREE.Vector3(), _d = new THREE.Vector3(), _inv = new THREE.Matrix4();
+function rayHit(origin, dir) {
+  ray.set(origin, dir); ray.far = 6;
+  const h = ray.intersectObjects([menu, slider, capPanel], false)[0];
+  return h || null;
+}
+function menuClickAt(uv) {
+  const x = uv.x * MW, y = (1 - uv.y) * MH;
+  for (const b of menuButtons) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { if (b.en === false) return; sfx('click', { pan: -0.7 }); doMenu(b.id); return; }
+}
+function menuHoverAt(uv) { const x = uv.x * MW, y = (1 - uv.y) * MH; for (const b of menuButtons) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b.id; return null; }
+function sliderSet(uv) {
+  const sp = sliderSpec(); if (!['edge', 'screw', 'twin', 'gb'].includes(st.mode)) return;
+  const x = uv.x * SW, v = clamp((x - 24) / (SW - 48), 0, 1) * (sp.max - sp.min) + sp.min;
+  if (st.mode === 'gb') st.gbAngle = Math.round(v * 2) / 2; else st.sliderTau = Math.abs(v) < .04 ? 0 : v;
+  sliderDirty = true;
+}
+// rayo en coordenadas locales de la red
+function localRay(origin, dir) {
+  crystal.updateMatrixWorld(); _inv.copy(crystal.matrixWorld).invert();
+  _o.copy(origin).applyMatrix4(_inv); _d.copy(dir).transformDirection(_inv);
+  return [_o.x, _o.y, _o.z, _d.x, _d.y, _d.z];
+}
+function pickAtom(r, opts = {}) {
+  const [ox, oy, oz, dx, dy, dz] = r, sz = (st.compact ? 1 : .5) * L.R; let best = -1, bt = 1e9;
+  for (let i = 0; i < N; i++) {
+    if (HID[i] && !opts.hidden) continue;
+    const rad = HID[i] ? .32 * L.nn : Math.max(sz * KRAD[KIND[i]], .3 * L.nn);
+    const P = HID[i] ? REF : CUR, cx = P[i * 3] - ox, cy = P[i * 3 + 1] - oy, cz = P[i * 3 + 2] - oz;
+    const t = cx * dx + cy * dy + cz * dz; if (t < 0) continue;
+    const d2 = cx * cx + cy * cy + cz * cz - t * t; if (d2 > rad * rad) continue;
+    const th = t - Math.sqrt(rad * rad - d2); if (th < bt) { bt = th; best = i; }
+  }
+  return [best, bt];
+}
+function pickSite(r, type) {
+  const [ox, oy, oz, dx, dy, dz] = r; let best = -1, bt = 1e9;
+  for (let i = 0; i < NS; i++) {
+    if (SITEOCC[i] >= 0 || (type >= 0 && SITET[i] !== type)) continue;
+    const cx = SITES[i * 3] - ox, cy = SITES[i * 3 + 1] - oy, cz = SITES[i * 3 + 2] - oz, t = cx * dx + cy * dy + cz * dz; if (t < 0) continue;
+    const d2 = cx * cx + cy * cy + cz * cz - t * t; if (d2 < (.28 * L.nn) ** 2 && t < bt) { bt = t; best = i; }
+  }
+  return [best, bt];
+}
+function crystalAction(origin, dir, hand) {
+  const r = localRay(origin, dir), m = st.mode;
+  if (m === 'vac') {
+    const [i] = pickAtom(r, { hidden: true });
+    if (i >= 0 && KIND[i] === 0) { HID[i] = HID[i] ? 0 : 1; if (SEL === i) SEL = -1; relaxDirty = colDirty = true; sfx('pop', { up: !HID[i] }); haptic(hand, .5, 30); }
+    return;
+  }
+  if (m === 'int') {
+    const ty = L.sites.tet.length ? st.siteType : 0;
+    const [i, ta] = pickAtom(r), [s, ts] = pickSite(r, ty);
+    if (s >= 0 && (i < 0 || ts < ta + .25 * L.nn)) { addInterstitial(s, 1); sfx('pop', { up: true }); haptic(hand, .5, 30); }
+    else if (i >= 0 && (KIND[i] === 1 || KIND[i] === 4)) { removeAtom(i); sfx('pop', { up: false }); haptic(hand, .5, 30); }
+    return;
+  }
+  if (m === 'sub') {
+    const [i] = pickAtom(r);
+    if (i >= 0 && KIND[i] !== 1 && KIND[i] !== 4) { KIND[i] = KIND[i] === 0 ? 2 : KIND[i] === 2 ? 3 : 0; relaxDirty = colDirty = true; sfx('pop', { up: KIND[i] !== 3 }); haptic(hand, .5, 30); }
+    return;
+  }
+  // resto: seleccionar átomo y mostrar su coordinación
+  const [i] = pickAtom(r);
+  SEL = i === SEL ? -1 : i; updateNeighbors(); colDirty = true; sfx('click');
+}
+
+// ---------- acciones ----------
+function setLattice(k) { st.lat = k; L = LAT[k]; if (!L.sites.tet.length) st.siteType = 0; if (L.id !== 'fcc') st.partials = false; buildModel(); }
+function setMode(id) { st.mode = id; st.sliderTau = 0; buildModel(); }
+function doMenu(id) {
+  const [a, b] = id.split(':');
+  if (a === 'lat') return setLattice(b);
+  if (a === 'mode') return setMode(b);
+  switch (id) {
+    case 'size': st.compact = !st.compact; posDirty = true; break;
+    case 'sites': st.showSites = !st.showSites; break;
+    case 'stype': st.siteType = 1 - st.siteType; break;
+    case 'partials': st.partials = !st.partials; break;
+    case 'cyclic': st.cyclic = !st.cyclic; break;
+    case 'frenkel': frenkel(); break;
+    case 'action': actionA(); break;
+    case 'reset': buildModel(); break;
+    case 'center': homeCrystal(); break;
+    case 'resetall': resetAll(); break;
+    case 'home': { const ses = renderer.xr.getSession && renderer.xr.getSession(); try { if (ses) ses.end(); } catch (e) {} location.href = '../'; break; }
+    case 'exit': exitApp(); break;
+    case 'sound': st.sound = !st.sound; break;
+    case 'plane': cyclePlane(); break;
+    case 'photo': takePhoto(); break;
+    case 'rec': toggleRec(); break;
+    case 'help': st.help = !st.help; break;
+    case 'bonds': st.bonds = !st.bonds; bondTimer = 0; break;
+    case 'rot': crystal.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), Math.PI / 2); break;
+  }
+  menuDirty = true;
+}
+function actionA() {
+  const m = st.mode;
+  if (m === 'vac') { // salto de un vecino al hueco
+    const vs = []; for (let i = 0; i < N; i++) if (HID[i] && KIND[i] === 0) vs.push(i);
+    if (!vs.length) return;
+    const v = vs[Math.floor(Math.random() * vs.length)], cand = [];
+    for (let j = 0; j < N; j++) { if (HID[j] || KIND[j] !== 0) continue; const d = Math.hypot(REF[j * 3] - REF[v * 3], REF[j * 3 + 1] - REF[v * 3 + 1], REF[j * 3 + 2] - REF[v * 3 + 2]); if (d < 1.1 * L.nn) cand.push(j); }
+    if (!cand.length) return;
+    const j = cand[Math.floor(Math.random() * cand.length)];
+    const from = [CUR[j * 3], CUR[j * 3 + 1], CUR[j * 3 + 2]];
+    for (let c = 0; c < 3; c++) { const t = REF[j * 3 + c]; REF[j * 3 + c] = REF[v * 3 + c]; REF[v * 3 + c] = t; }
+    JUMP = { i: j, from, to: [REF[j * 3], REF[j * 3 + 1], REF[j * 3 + 2]], t: 0, dur: .55 };
+    if (SEL === j) SEL = -1; relaxDirty = true; computePlane(); sfx('jump'); haptic('right', .3, 40);
+  } else if (m === 'int') {
+    let i = -1; for (let k = N - 1; k >= 0; k--) if (KIND[k] === 1 || KIND[k] === 4) { i = k; break; }
+    if (i < 0) return;
+    const s0 = SITEOF[i], x = SITES[s0 * 3], y = SITES[s0 * 3 + 1], z = SITES[s0 * 3 + 2];
+    let best = [], bd = 1e9;
+    for (let s = 0; s < NS; s++) {
+      if (s === s0 || SITEOCC[s] >= 0 || SITET[s] !== SITET[s0]) continue;
+      const d = Math.hypot(SITES[s * 3] - x, SITES[s * 3 + 1] - y, SITES[s * 3 + 2] - z);
+      if (d < bd - 1e-3) { bd = d; best = [s]; } else if (Math.abs(d - bd) < 1e-3) best.push(s);
+    }
+    if (!best.length) return;
+    const s = best[Math.floor(Math.random() * best.length)], from = [CUR[i * 3], CUR[i * 3 + 1], CUR[i * 3 + 2]];
+    SITEOCC[s0] = -1; SITEOCC[s] = i; SITEOF[i] = s; REF.set(SITES.subarray(s * 3, s * 3 + 3), i * 3);
+    JUMP = { i, from, to: [REF[i * 3], REF[i * 3 + 1], REF[i * 3 + 2]], t: 0, dur: .45 };
+    relaxDirty = true; sfx('jump'); haptic('right', .3, 40);
+  } else if (m === 'sub') {
+    const c = []; for (let i = 0; i < N; i++) if (KIND[i] === 0 && !HID[i]) c.push(i);
+    if (c.length) { KIND[c[Math.floor(Math.random() * c.length)]] = Math.random() < .5 ? 2 : 3; relaxDirty = colDirty = true; sfx('pop', { up: true }); }
+  } else if ((m === 'edge' || m === 'screw') && L.id === 'fcc') { st.partials = !st.partials; menuDirty = true; }
+  else if (m === 'gb') { const P = [4, 10, 22.6, 36.87]; const k = P.findIndex(p => p > st.gbAngle + .1); st.gbAngle = P[k < 0 ? 0 : k]; sliderDirty = true; }
+}
+function frenkel() {
+  if (st.mode !== 'vac' && st.mode !== 'int') return;
+  const c = []; for (let i = 0; i < N; i++) if (KIND[i] === 0 && !HID[i] && Math.hypot(REF[i * 3], REF[i * 3 + 1], REF[i * 3 + 2]) < 1.6 * L.nn) c.push(i);
+  if (!c.length) return;
+  const h = c[Math.floor(Math.random() * c.length)];
+  const s = nearestSite(REF[h * 3], REF[h * 3 + 1], REF[h * 3 + 2], -1); if (s < 0) return;
+  HID[h] = 1; addInterstitial(s, 4, [CUR[h * 3], CUR[h * 3 + 1], CUR[h * 3 + 2]]);
+  sfx('jump'); haptic('right', .4, 40);
+}
+
+// ---------- mandos de la Quest ----------
+let drag = null; // {hand} arrastrando la barra
+function readPads() {
+  const s = renderer.xr.getSession(); if (!s) return;
+  for (const h of ['left', 'right']) { prevPads[h] = pads[h]; pads[h] = {}; }
+  for (const src of s.inputSources) {
+    if (!src.gamepad || (src.handedness !== 'left' && src.handedness !== 'right')) continue;
+    const b = src.gamepad.buttons, ax = src.gamepad.axes;
+    pads[src.handedness] = { trig: !!(b[0] && b[0].pressed), grip: !!(b[1] && b[1].pressed), a: !!(b[4] && b[4].pressed), b: !!(b[5] && b[5].pressed), stk: !!(b[3] && b[3].pressed), sx: ax[2] || 0, sy: ax[3] || 0 };
+  }
+}
+const edge = (h, k) => pads[h][k] && !prevPads[h][k];
+const dz = v => Math.abs(v) < .15 ? 0 : (v - Math.sign(v) * .15) / .85;
+const UPV = new THREE.Vector3(0, 1, 0);
+function vrInput(dt) {
+  readPads();
+  let newHover = null;
+  st.stickTau = 0;
+  for (const hd of ['left', 'right']) {
+    const h = hands[hd], p = pads[hd]; if (!h) continue;
+    h.ctrl.updateMatrixWorld(true); h.ctrl.getWorldPosition(_p); _q.setFromRotationMatrix(h.ctrl.matrixWorld); const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(_q);
+    const hit = rayHit(_p, dir);
+    let len = 3;
+    if (hit) { len = hit.distance; h.dot.visible = true; h.dot.position.copy(hit.point); if (hit.object === menu) newHover = menuHoverAt(hit.uv); else if (hit.object === capPanel) newHover = capHoverAt(hit.uv); }
+    else h.dot.visible = false;
+    h.line.scale.z = len;
+    if (edge(hd, 'trig')) {
+      if (hit && hit.object === menu) { menuClickAt(hit.uv); haptic(hd, .3, 15); }
+      else if (hit && hit.object === slider) { drag = { hand: hd }; sliderSet(hit.uv); }
+      else if (hit && hit.object === capPanel) { capClickAt(hit.uv); haptic(hd, .3, 15); }
+      else crystalAction(_p, dir, hd);
+    }
+    if (drag && drag.hand === hd) { if (!p.trig) drag = null; else if (hit && hit.object === slider) sliderSet(hit.uv); }
+    if (edge(hd, 'grip')) startGrab(hd, h.ctrl);
+    if (!p.grip && prevPads[hd].grip) endGrab(hd);
+  }
+  if (newHover !== hoverId) { hoverId = newHover; menuDirty = true; capDirty = true; }
+  const R = pads.right, Lf = pads.left;
+  if (edge('right', 'a')) actionA();
+  if (edge('right', 'b')) { buildModel(); sfx('click'); }
+  if (edge('left', 'a')) takePhoto();
+  if (edge('left', 'stk')) toggleRec();
+  if (edge('left', 'b')) cyclePlane();
+  // stick derecho: solo τ (o ángulo / escala), nunca gira la red; stick izquierdo: girar la red
+  const ry = -dz(R.sy || 0); let lx = dz(Lf.sx || 0), ly = dz(Lf.sy || 0);
+  if (Math.abs(lx) > Math.abs(ly)) ly = 0; else lx = 0; // un eje por vez
+  st.vrTauActive = ry !== 0;
+  if (['edge', 'screw', 'twin'].includes(st.mode)) st.stickTau = ry;
+  else if (st.mode === 'gb' && ry) { st.gbAngle = clamp(st.gbAngle + ry * 12 * dt, 0, 45); sliderDirty = true; }
+  else if (ry && !Object.keys(grabbers).length) { userScale = clamp(userScale * Math.exp(ry * dt), .3, 5); crystal.scale.setScalar(baseScale() * userScale); }
+  if (!Object.keys(grabbers).length) {
+    if (lx) crystal.rotateOnWorldAxis(UPV, lx * 1.6 * dt);
+    if (ly) crystal.rotateOnWorldAxis(head.right, ly * 1.6 * dt);
+  }
+}
+
+// ---------- PC: mouse + teclado ----------
+const keys = {}; let yaw = 0, pitch = -0.2, mouseDown = false;
+const info = document.getElementById('info');
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+renderer.domElement.addEventListener('mousedown', e => {
+  if (renderer.xr.isPresenting) return;
+  if (document.pointerLockElement !== renderer.domElement) { renderer.domElement.requestPointerLock(); return; }
+  if (e.button === 0) {
+    mouseDown = true; const hit = rayHit(head.pos, head.fwd);
+    if (hit && hit.object === menu) menuClickAt(hit.uv);
+    else if (hit && hit.object === slider) { drag = { hand: 'mouse' }; sliderSet(hit.uv); }
+    else if (hit && hit.object === capPanel) capClickAt(hit.uv);
+    else crystalAction(head.pos, head.fwd, 'right');
+  } else if (e.button === 2) startGrab('mouse', camera);
+});
+addEventListener('mouseup', e => { if (e.button === 0) { mouseDown = false; if (drag && drag.hand === 'mouse') drag = null; } if (e.button === 2) endGrab('mouse'); });
+addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  yaw -= e.movementX * .0022; pitch = clamp(pitch - e.movementY * .0022, -1.5, 1.5);
+});
+addEventListener('wheel', e => { if (renderer.xr.isPresenting) return; userScale = clamp(userScale * Math.exp(-e.deltaY * .001), .3, 5); crystal.scale.setScalar(baseScale() * userScale); }, { passive: true });
+document.addEventListener('pointerlockchange', () => { info.style.display = document.pointerLockElement ? 'none' : 'block'; if (!document.pointerLockElement && cap.items.length) galOpen = true; updateGalleryVis(); });
+addEventListener('keydown', e => {
+  keys[e.code] = true; if (renderer.xr.isPresenting) return;
+  const k = e.key.toLowerCase();
+  if (e.code === 'Tab') { e.preventDefault(); const i = MODES.findIndex(m => m.id === st.mode); setMode(MODES[(i + (e.shiftKey ? MODES.length - 1 : 1)) % MODES.length].id); return; }
+  if (e.repeat) return;
+  const lat = { '1': 'sc', '2': 'bcc', '3': 'fcc', '4': 'hcp' }[k]; if (lat) { setLattice(lat); return; }
+  const map = { ' ': 'action', b: 'reset', backspace: 'reset', t: 'size', g: 'plane', i: 'sites', o: 'stype', p: 'partials', c: 'cyclic', f: 'frenkel', m: 'sound', h: 'center', j: 'rot', e: 'bonds', z: 'resetall', escape: 'exit', k: 'photo', v: 'rec' };
+  if (map[k]) { if (k === ' ') e.preventDefault(); doMenu(map[k]); sfx('click'); }
+  if (k === '0') { st.sliderTau = 0; sliderDirty = true; }
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+function desktopInput(dt) {
+  // movimiento
+  const sp = 1.6 * dt, f = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)), r = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+  if (keys.KeyW) camera.position.addScaledVector(f, sp); if (keys.KeyS) camera.position.addScaledVector(f, -sp);
+  if (keys.KeyD) camera.position.addScaledVector(r, sp); if (keys.KeyA) camera.position.addScaledVector(r, -sp);
+  camera.position.y = 1.7;
+  camera.rotation.set(pitch, yaw, 0, 'YXZ'); camera.updateMatrixWorld();
+  // τ con flechas
+  const up = keys.ArrowUp ? 1 : 0, dn = keys.ArrowDown ? 1 : 0;
+  if (st.mode === 'gb') { if (up || dn) { st.gbAngle = clamp(st.gbAngle + (up - dn) * 10 * dt, 0, 45); sliderDirty = true; } st.keyTau = 0; }
+  else if (up || dn) st.keyTau = clamp(st.keyTau + (up - dn) * 1.4 * dt, -1, 1);
+  else st.keyTau *= Math.exp(-dt * 6);
+  if (!Object.keys(grabbers).length) {
+    const ry = ((keys.KeyE ? 1 : 0) - (keys.KeyQ ? 1 : 0) + (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0)) * 1.5 * dt;
+    const rp = ((keys.KeyF ? 1 : 0) - (keys.KeyR ? 1 : 0)) * 1.5 * dt;
+    if (ry) crystal.rotateOnWorldAxis(UPV, ry);
+    if (rp) crystal.rotateOnWorldAxis(head.right, rp);
+  }
+}
+function desktopHover() {
+  const hit = rayHit(head.pos, head.fwd); const nh = hit && hit.object === menu ? menuHoverAt(hit.uv) : hit && hit.object === capPanel ? capHoverAt(hit.uv) : null;
+  if (nh !== hoverId) { hoverId = nh; menuDirty = true; capDirty = true; }
+  if (drag && drag.hand === 'mouse' && hit && hit.object === slider) sliderSet(hit.uv);
+}
+
+// ===================== PANEL DE ESTADO (en el menú) =====================
+function fitText(g, t, x, y, maxW, px) { let f = px; do { g.font = f + 'px system-ui, sans-serif'; f--; } while (g.measureText(t).width > maxW && f > 12); g.fillText(t, x, y); }
+let fps = 72, fpsAcc = 0, fpsN = 0;
+let hudKey = '';
+function drawHUD() {
+  const g = hudG;
+  let l2 = '';
+  const t = st.tau, ts = (t >= 0 ? '+' : '') + t.toFixed(2);
+  if (MD.kind === 'disl') l2 = `τ = ${ts} · τc = ${L.tauC.toFixed(2)} · ${Math.abs(t) > L.tauC ? 'deslizando ▸' : 'solo deformación elástica'} · escalón ${MD.S}·b · sistema ${L.sistema}`;
+  else if (MD.kind === 'twin') l2 = `τ = ${ts} · τ macla = ${L.tauT.toFixed(2)} · capas macladas: ${MD.layer} · corte γ = ${MD.gamma.toFixed(3)} · ${L.twin.label}`;
+  else if (MD.kind === 'gb') { const th = st.gbAngle * Math.PI / 180; l2 = `θ = ${st.gbAngle.toFixed(1)}° · ` + (st.gbAngle < 15 && st.gbAngle > .5 ? `bajo ángulo: dislocaciones cada D ≈ b/θ = ${(1 / th).toFixed(1)}·b` : st.gbAngle <= .5 ? 'monocristal' : 'alto ángulo: límite desordenado'); }
+  else {
+    let v = 0, it = 0, so = 0; for (let i = 0; i < N; i++) { if (HID[i]) v++; if (KIND[i] === 1 || KIND[i] === 4) it++; if (KIND[i] === 2 || KIND[i] === 3) so++; }
+    l2 = st.mode === 'perfect' ? `NC = ${L.NC} · FEA = ${L.FEA} · átomos/celda = ${L.apc} · ${L.rel}` + (SEL >= 0 ? ` · vecinos del átomo: ${NEIGH.length}` : '')
+      : `vacancias: ${v} · intersticiales: ${it} · solutos: ${so}`;
+  }
+  if (PLANE && MD.kind === 'block') l2 = PLANE.info;
+  const l1 = `${L.corto} · ${modeName(st.mode)}`;
+  hudInfo.l1 = l1; hudInfo.l2 = l2;
+  const lr = cap.rec ? '● REC ' + mmss(cap.recSec) : cap.toast ? cap.toast : `${Math.round(fps)} fps · ×${(3e8 * userScale).toExponential(0).replace('e+', '·10^')}`;
+  const key = l1 + l2 + lr + renderer.xr.isPresenting;
+  if (key === hudKey) return; hudKey = key;
+  g.clearRect(0, 0, 1024, 200); rr(g, 0, 0, 1024, 200, 26); g.fillStyle = 'rgba(16,21,34,.94)'; g.fill();
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillStyle = '#ffd34d'; g.font = 'bold 40px system-ui, sans-serif'; g.fillText(l1, 28, 56);
+  g.textAlign = 'right'; g.fillStyle = cap.rec ? '#ff5a5a' : cap.toast ? '#9dffcf' : '#8fa0c0'; g.font = (cap.rec || cap.toast ? 'bold ' : '') + '24px system-ui, sans-serif'; g.fillText(lr, 996, 54);
+  g.textAlign = 'left'; g.fillStyle = '#eef3ff';
+  fitText(g, l2, 28, 112, 968, 30);
+  g.fillStyle = '#9fb0cf';
+  fitText(g, renderer.xr.isPresenting ? 'Gatillo: menú/átomos · Agarre: mover (2 manos: escalar) · Stick der.: τ · Stick izq.: girar · A: acción · B: reiniciar · X: foto · clic stick izq.: video · Y: planos'
+    : 'Clic: menú / átomos · Clic der.: agarrar · Rueda: escala · ↑↓: τ · Q/E R/F: girar · Espacio: acción · B: reiniciar · Tab: defecto · 1-4: red · G: planos · K: foto · V: video', 28, 166, 968, 24);
+  hudTex.needsUpdate = true;
+}
+
+// ===================== CAPTURA: FOTO Y VIDEO =====================
+// No se puede leer el cuadro de WebXR, así que un segundo renderer fuera de pantalla filma el cristal con una
+// cámara virtual (estable, o "mi vista"). Sale sin menús ni mandos y con un rótulo con los datos del defecto.
+const cap = { ok: false, R: null, gl: null, cv: null, g: null, cam: new THREE.PerspectiveCamera(45, 16 / 9, .05, 1000), w: 0, h: 0, acc: 0, pAcc: 0,
+  vw: 1280, vh: 720, dir: new THREE.Vector3(0, .3, 1).normalize(), dirInit: false, live: false, rec: null, chunks: [], recT0: 0, recSec: 0, items: [], toast: '', toastT: 0, flash: 0 };
+const hudInfo = { l1: '', l2: '' };
+const mmss = n => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+function showToast(t) { cap.toast = t; cap.toastT = 2.8; capDirty = true; hudKey = ''; }
+function capSize(w, h) { if (cap.w === w && cap.h === h) return; cap.w = w; cap.h = h; cap.R.setSize(w, h, false); cap.cv.width = w; cap.cv.height = h; cap.cam.aspect = w / h; cap.cam.updateProjectionMatrix(); }
+function initCapture() {
+  if (cap.ok) return true;
+  try {
+    cap.gl = document.createElement('canvas'); cap.cv = document.createElement('canvas'); cap.g = cap.cv.getContext('2d');
+    cap.R = new THREE.WebGLRenderer({ canvas: cap.gl, antialias: true, preserveDrawingBuffer: true });
+    cap.R.outputColorSpace = THREE.SRGBColorSpace; cap.R.setPixelRatio(1);
+    cap.ok = true; capSize(640, 360);
+  } catch (e) { console.warn('Captura no disponible', e); cap.ok = false; showToast('Captura no disponible'); }
+  return cap.ok;
+}
+const _ct = new THREE.Vector3(), _cd = new THREE.Vector3();
+function updateCapCamera(dt, snap) {
+  const c = cap.cam;
+  if (st.capFrame === 'vista') { c.fov = 60; c.updateProjectionMatrix(); c.position.copy(head.pos); c.quaternion.copy(head.quat); c.updateMatrixWorld(true); return; }
+  const B = MD.box; _ct.set((B.x0 + B.x1) / 2, (B.y0 + B.y1) / 2, (B.z0 + B.z1) / 2); crystal.updateMatrixWorld(); crystal.localToWorld(_ct);
+  const Rr = .5 * Math.hypot(B.x1 - B.x0, B.y1 - B.y0, B.z1 - B.z0) * crystal.scale.x * 1.05 + .02;
+  c.fov = 45; c.updateProjectionMatrix();
+  const vf = c.fov * Math.PI / 360, hf = Math.atan(Math.tan(vf) * c.aspect), Dd = Rr / Math.sin(Math.min(vf, hf)); // encuadra todo el cristal
+  _cd.copy(head.pos).sub(_ct); if (_cd.lengthSq() < 1e-4) _cd.set(0, .3, 1);
+  _cd.normalize(); _cd.y = clamp(_cd.y, -.15, .75); _cd.normalize();   // sigue tu lado, con suavizado (sin temblor de cabeza)
+  if (snap || !cap.dirInit) { cap.dir.copy(_cd); cap.dirInit = true; } else cap.dir.lerp(_cd, 1 - Math.exp(-dt * 2.5)).normalize();
+  c.position.copy(_ct).addScaledVector(cap.dir, Dd); c.up.set(0, 1, 0); c.lookAt(_ct); c.updateMatrixWorld(true);
+}
+function capRender() {
+  const hide = [menu, slider, capPanel], vis = hide.map(o => o.visible); hide.forEach(o => { o.visible = false; });
+  const hs = allHands.map(h => [h.ctrl.visible, h.grip.visible, h.dot.visible]); allHands.forEach(h => { h.ctrl.visible = h.grip.visible = h.dot.visible = false; });
+  cap.R.render(scene, cap.cam);
+  hide.forEach((o, i) => { o.visible = vis[i]; }); allHands.forEach((h, i) => { h.ctrl.visible = hs[i][0]; h.grip.visible = hs[i][1]; h.dot.visible = hs[i][2]; });
+}
+function capCompose() { // imagen + rótulo (logo / nombre arriba, datos del defecto abajo)
+  const g = cap.g, w = cap.w, h = cap.h, k = h / 720;
+  g.drawImage(cap.gl, 0, 0, w, h);
+  g.fillStyle = 'rgba(10,14,28,.66)'; g.fillRect(0, h - 70 * k, w, 70 * k);
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillStyle = '#ffd34d'; g.font = `bold ${26 * k}px system-ui, sans-serif`; g.fillText(hudInfo.l1, 20 * k, h - 40 * k);
+  g.fillStyle = '#eef3ff'; fitText(g, hudInfo.l2, 20 * k, h - 14 * k, w - 40 * k, 20 * k);
+  let x = 18 * k;
+  if (logoOk) { const lh = 48 * k, lw = logoImg.width * lh / logoImg.height; g.drawImage(logoImg, x, 14 * k, lw, lh); x += lw + 10 * k; }
+  const wm = logoOk ? APP_NAME : APP_NAME + ' · UTN FRSN';
+  g.font = `bold ${24 * k}px system-ui, sans-serif`; g.lineWidth = 5 * k; g.lineJoin = 'round'; g.strokeStyle = 'rgba(10,14,28,.85)'; g.strokeText(wm, x, 42 * k); g.fillStyle = '#ffffff'; g.fillText(wm, x, 42 * k);
+}
+function captureTick(dt) {
+  if (cap.toastT > 0) { cap.toastT -= dt; if (cap.toastT <= 0) { cap.toast = ''; capDirty = true; hudKey = ''; } }
+  if (cap.flash > 0) { cap.flash = Math.max(0, cap.flash - dt * 2.5); capDirty = true; }
+  if (!(st.capPreview || cap.rec)) { if (cap.live) { cap.live = false; capDirty = true; } return; }
+  if (!initCapture()) { st.capPreview = false; return; }
+  cap.acc += dt;
+  if (cap.acc < (cap.rec ? 1 / 24 : 1 / 12)) return;
+  const adt = cap.acc; cap.acc = 0;
+  if (!cap.rec) capSize(640, 360);
+  updateCapCamera(adt); capRender(); capCompose(); cap.live = true; capDirty = true; cap.nf = (cap.nf || 0) + 1;
+  if (cap.rec) { const sec = Math.floor((performance.now() - cap.recT0) / 1000); if (sec !== cap.recSec) { cap.recSec = sec; hudKey = ''; } if (sec >= 300) stopRec(); }
+}
+function takePhoto() {
+  if (!initCapture()) return;
+  const pw = cap.w, ph = cap.h;
+  if (!cap.rec) capSize(1920, 1080);                 // en foto, 1080p (si se está grabando se mantiene el tamaño del video)
+  updateCapCamera(0, !cap.live); capRender(); capCompose();
+  cap.cv.toBlob(b => { if (b) addCapture('foto', b); }, 'image/png');
+  if (!cap.rec) capSize(pw, ph);
+  cap.flash = .85; sfx('shutter', { pan: 0 }); haptic('left', .6, 40); haptic('right', .6, 40);
+}
+function toggleRec() { if (cap.rec) stopRec(); else startRec(); }
+function startRec() {
+  if (cap.rec || !initCapture()) return;
+  if (typeof MediaRecorder === 'undefined') { showToast('Este navegador no graba video'); return; }
+  capSize(cap.vw, cap.vh); cap.dirInit = false; cap.acc = 0;
+  updateCapCamera(0, true); capRender(); capCompose();
+  let r;
+  try {
+    const stream = cap.cv.captureStream(24);
+    if (audio.dest) for (const t of audio.dest.stream.getAudioTracks()) stream.addTrack(t);
+    const mime = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+    r = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 4000000 } : {});
+  } catch (e) { console.warn(e); showToast('No se pudo iniciar la grabación'); return; }
+  cap.chunks = []; r.ondataavailable = e => { if (e.data && e.data.size) cap.chunks.push(e.data); };
+  r.onstop = () => { const blob = new Blob(cap.chunks, { type: r.mimeType || 'video/webm' }); cap.chunks = []; if (blob.size) addCapture('video', blob); };
+  r.start(1000); cap.rec = r; cap.recT0 = performance.now(); cap.recSec = 0;
+  sfx('pop', { up: true }); haptic('left', .5, 60); capDirty = true; hudKey = '';
+}
+function stopRec() {
+  if (!cap.rec) return; const r = cap.rec; cap.rec = null;
+  try { r.stop(); } catch (e) { }
+  sfx('pop', { up: false }); haptic('left', .4, 40); capDirty = true; hudKey = '';
+}
+function downloadItem(it) { const a = document.createElement('a'); a.href = it.url; a.download = it.name; document.body.appendChild(a); a.click(); a.remove(); }
+function addCapture(kind, blob) {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  const ts = `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
+  const ext = kind === 'foto' ? 'png' : (blob.type.includes('mp4') ? 'mp4' : 'webm');
+  const it = { kind, blob, url: URL.createObjectURL(blob), name: `cristalab_${L.corto}_${st.mode}_${ts}.${ext}` };
+  cap.items.push(it); while (cap.items.length > 12) URL.revokeObjectURL(cap.items.shift().url);
+  if (st.capAuto) { try { downloadItem(it); } catch (e) { } }
+  showToast(kind === 'foto' ? 'Foto guardada' : 'Video guardado');
+  if (!renderer.xr.isPresenting) galOpen = true; renderGallery();
+}
+// ---------- panel de cámara ----------
+function drawCap() {
+  const g = capG; capButtons = []; g.clearRect(0, 0, CW, CH);
+  rr(g, 0, 0, CW, CH, 26); g.fillStyle = 'rgba(16,21,34,.94)'; g.fill();
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.fillStyle = '#ffd34d'; g.font = 'bold 30px system-ui, sans-serif'; g.fillText('CÁMARA', 28, 42);
+  g.textAlign = 'right'; g.font = '22px system-ui, sans-serif'; g.fillStyle = cap.rec ? '#ff5a5a' : '#8fa0c0';
+  g.fillText(cap.rec ? '● REC ' + mmss(cap.recSec) : st.capPreview ? 'vista previa' : 'apagada', CW - 28, 40);
+  const px = 24, py = 56, pw = CW - 48, ph = Math.round(pw * 9 / 16);
+  rr(g, px, py, pw, ph, 12); g.fillStyle = '#0b0f1a'; g.fill();
+  if (cap.live && cap.ok) { g.save(); rr(g, px, py, pw, ph, 12); g.clip(); g.drawImage(cap.cv, px, py, pw, ph); g.restore(); }
+  else { g.textAlign = 'center'; g.fillStyle = '#5e6779'; g.font = '24px system-ui, sans-serif'; g.fillText(st.capPreview ? 'iniciando cámara…' : 'Vista previa apagada', px + pw / 2, py + ph / 2); }
+  if (cap.flash > 0) { g.fillStyle = `rgba(255,255,255,${cap.flash})`; rr(g, px, py, pw, ph, 12); g.fill(); }
+  if (cap.rec) { g.fillStyle = '#ff3b3b'; g.beginPath(); g.arc(px + 30, py + 30, 11, 0, 7); g.fill(); }
+  g.strokeStyle = cap.rec ? '#ff5a5a' : '#46526e'; g.lineWidth = 3; rr(g, px, py, pw, ph, 12); g.stroke();
+  g.textAlign = 'left'; g.fillStyle = cap.toast ? '#9dffcf' : '#c9d4ea';
+  const last = cap.items[cap.items.length - 1];
+  fitText(g, cap.toast || (last ? 'Última: ' + last.name : 'X: foto · clic del stick izquierdo: video'), 28, py + ph + 32, CW - 56, 21);
+  const by = py + ph + 50, bw = 380, bw2 = CW - 48 - 16 - bw;
+  [
+    { id: 'cap:photo', label: 'Tomar foto (X)', en: true },
+    { id: 'cap:rec', label: cap.rec ? '■ Detener · ' + mmss(cap.recSec) : '● Grabar video', danger: !!cap.rec, en: true },
+    { id: 'cap:prev', label: 'Vista previa: ' + (st.capPreview ? 'sí' : 'no'), on: st.capPreview, en: true },
+    { id: 'cap:frame', label: 'Encuadre: ' + (st.capFrame === 'cristal' ? 'cristal' : 'mi vista'), en: true },
+    { id: 'cap:auto', label: 'Guardar al capturar: ' + (st.capAuto ? 'sí' : 'no'), on: st.capAuto, en: true },
+    { id: 'cap:dlall', label: `Descargar todo (${cap.items.length})`, en: cap.items.length > 0 },
+  ].forEach((b, i) => button(g, { ...b, small: true, x: 24 + (i % 2) * (bw + 16), y: by + Math.floor(i / 2) * 68, w: i % 2 ? bw2 : bw, h: 58 }, false, capButtons));
+  capTex.needsUpdate = true; capDirty = false;
+}
+function capHit(uv) { const x = uv.x * CW, y = (1 - uv.y) * CH; return capButtons.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h); }
+function capHoverAt(uv) { const b = capHit(uv); return b ? b.id : null; }
+function capClickAt(uv) {
+  const b = capHit(uv); if (!b || b.en === false) return;
+  switch (b.id) {
+    case 'cap:photo': takePhoto(); return;
+    case 'cap:rec': toggleRec(); return;
+    case 'cap:prev': st.capPreview = !st.capPreview; break;
+    case 'cap:frame': st.capFrame = st.capFrame === 'cristal' ? 'vista' : 'cristal'; cap.dirInit = false; break;
+    case 'cap:auto': st.capAuto = !st.capAuto; break;
+    case 'cap:dlall': cap.items.forEach((it, i) => setTimeout(() => downloadItem(it), i * 400)); break;
+  }
+  sfx('click', { pan: .6 }); capDirty = true;
+}
+// ---------- galería (HTML): se ve en la PC y al salir de VR ----------
+const galEl = document.getElementById('galeria'); let galOpen = false;
+function updateGalleryVis() { galEl.style.display = galOpen && cap.items.length && !document.pointerLockElement && !renderer.xr.isPresenting ? 'block' : 'none'; }
+function renderGallery() {
+  galEl.innerHTML = '';
+  const h = document.createElement('h2'); h.innerHTML = `<span>Capturas (${cap.items.length})</span>`;
+  const x = document.createElement('button'); x.textContent = '×'; x.onclick = () => { galOpen = false; updateGalleryVis(); }; h.appendChild(x); galEl.appendChild(h);
+  for (const it of cap.items.slice().reverse()) {
+    const row = document.createElement('div'); row.className = 'it';
+    const m = document.createElement(it.kind === 'foto' ? 'img' : 'video'); m.src = it.url; if (it.kind !== 'foto') { m.controls = true; m.muted = true; }
+    const a = document.createElement('a'); a.href = it.url; a.download = it.name; a.textContent = 'Descargar'; const n = document.createElement('div'); n.textContent = it.name;
+    const c = document.createElement('div'); c.appendChild(n); c.appendChild(a); row.appendChild(m); row.appendChild(c); galEl.appendChild(row);
+  }
+  const p = document.createElement('p'); p.textContent = 'Si dentro de las gafas no se descargaron solas, usá "Descargar".'; galEl.appendChild(p);
+  updateGalleryVis();
+}
+
+// ===================== BUCLE PRINCIPAL =====================
+let last = performance.now(), frame = 0;
+function loop(time) {
+  const now = performance.now(); const dt = Math.min((now - last) / 1000, .05); last = now; frame++;
+  fpsAcc += dt; fpsN++; if (fpsAcc > .5) { fps = Math.round(fpsN / fpsAcc / 2) * 2; fpsAcc = 0; fpsN = 0; }
+  st.time += dt;
+  const xr = renderer.xr.isPresenting;
+  if (xr) renderer.xr.updateCamera(camera);
+  else desktopInput(dt);
+  updateHead();
+  if (xr && pendingAnchor > 0 && --pendingAnchor === 0) anchorToHead(); // al entrar en VR, todo frente al jugador
+  if (xr) vrInput(dt); else desktopHover();
+  updateGrab();
+
+  // esfuerzo aplicado total
+  const auto = st.cyclic && ['edge', 'screw', 'twin'].includes(st.mode) ? .9 * Math.sin(st.time * .7) : 0;
+  const tau = ['edge', 'screw', 'twin'].includes(st.mode) ? clamp(st.sliderTau + st.stickTau + st.keyTau + auto, -1, 1) : 0;
+  if (Math.abs(tau - st.tau) > .004) sliderDirty = true;
+  st.tau = tau;
+
+  if (MD.kind === 'disl') simDisl(dt);
+  else if (MD.kind === 'twin') simTwin(dt);
+  else if (MD.kind === 'gb') simGB(dt);
+  if (relaxDirty) relax();
+  if (JUMP) { JUMP.t += dt; if (JUMP.t >= JUMP.dur) { const i = JUMP.i; JUMP = null; if (i < N) CUR.set(TGT.subarray(i * 3, i * 3 + 3), i * 3); } }
+  if (posDirty || JUMP) updateMatrices(dt);
+  if (st.bonds) { if ((bondTimer -= dt) <= 0) { bondTimer = (MD.kind === 'disl' || MD.kind === 'twin' || JUMP || posDirty) ? 0 : .5; updateBonds(); } }
+  else if (bondGeo.drawRange.count) bondGeo.setDrawRange(0, 0);
+  if (SEL >= 0 && (neighTimer -= dt) <= 0) { neighTimer = .2; updateNeighbors(); }
+  if (colDirty) updateColors();
+  updateSites();
+  updateGuides(); placeSprites();
+
+  if (menuDirty) drawMenu();
+  if (sliderDirty && frame % 3 === 0) drawSlider();
+  if (frame % 4 === 0) drawHUD();
+  captureTick(dt);
+  if (capDirty && (!cap.live || (cap.pAcc += dt) > .1)) { cap.pAcc = 0; drawCap(); }
+
+  if (audio.ready) {
+    const speed = MD.kind === 'disl' ? (MD.active && Math.abs(tau) > L.tauC ? 1 : 0) : MD.kind === 'twin' ? (Math.abs(tau) > L.tauT ? 1 : 0) : 0;
+    audio.node.port.postMessage({ t: 'st', tau, speed, on: st.sound ? 1 : 0 });
+  }
+  renderer.render(scene, camera);
+}
+
+buildModel(); updateMatrices(1); drawMenu(); drawSlider();
+renderer.setAnimationLoop(loop);
+window.__app = { cap, takePhoto, toggleRec, info() { return PLANE ? PLANE.info + ' | cls:' + Array.from(PLN.slice(0, N)).reduce((o, v) => (o[v] = (o[v] || 0) + 1, o), {}) : null; }, act() { crystalAction(head.pos, head.fwd, 'right'); }, actionA, frenkel, counts() { let v = 0, it = 0, so = 0; for (let i = 0; i < N; i++) { if (HID[i]) v++; if (KIND[i] === 1 || KIND[i] === 4) it++; if (KIND[i] === 2 || KIND[i] === 3) so++; } return { N, v, it, so, sel: SEL, neigh: NEIGH.length }; }, menuCv, hudCv, sliderCv, view(y, p) { yaw = y; pitch = p; }, st, get N() { return N; }, setLattice, setMode, doMenu, crystal, camera, get MD() { return MD; } };
+
+</script>
+</body>
+</html>
